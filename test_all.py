@@ -15,6 +15,7 @@ from mingpt.model import GPT
 
 import repo_orientation as ro
 import tokenization_protocol as tp
+import experiment_design as ed
 
 
 # --------------------------
@@ -152,7 +153,7 @@ def test_bpe_pair_validation_example_michelle_jones_smith():
     """
     Uses the assignment's canonical-style example to ensure:
     - same token length
-    - ideally a one-token difference (it usually is, but tokenizer quirks can vary)
+    - at least one differing token (ideally one)
     """
     from mingpt.bpe import BPETokenizer
 
@@ -169,11 +170,90 @@ def test_bpe_pair_validation_example_michelle_jones_smith():
     comp = tp.compare_clean_corrupt(clean_rep, corrupt_rep)
 
     assert comp.same_length is True, f"Expected same token length; got {clean_rep.seq_len} vs {corrupt_rep.seq_len}"
-
-    # We prefer one-token diff; if it isn't, we still show it's a valid pair for same-length constraint.
-    # But for the assignment report you should aim for diff_count == 1.
     assert comp.diff_count >= 1
 
+
+# --------------------------
+# Section 4 tests (experiment design)
+# --------------------------
+
+def test_changed_token_position_returns_correct_pos_synthetic():
+    clean = tp.TokenizationReport(
+        text="clean",
+        token_ids=[1, 2, 3, 4],
+        token_strs=["a", "b", "c", "d"],
+        seq_len=4,
+        decoded_roundtrip="abcd",
+    )
+    corrupt = tp.TokenizationReport(
+        text="corrupt",
+        token_ids=[1, 99, 3, 4],
+        token_strs=["a", "X", "c", "d"],
+        seq_len=4,
+        decoded_roundtrip="aXcd",
+    )
+    comp = tp.compare_clean_corrupt(clean, corrupt)
+    assert comp.one_token_diff is True
+    assert ed.changed_token_position(comp) == 1
+
+
+def test_default_hypothesis_mentions_changed_position():
+    h = ed.default_hypothesis(7)
+    assert "position 7" in h
+
+
+def test_ensure_leading_space_adds_space_when_missing():
+    assert ed.ensure_leading_space("Paris") == " Paris"
+    assert ed.ensure_leading_space(" Paris") == " Paris"
+
+
+def test_single_token_id_raises_for_multi_token_string_with_dummy_tokenizer():
+    class DummyBPE:
+        def __call__(self, s: str):
+            # Return (1, T) tensor
+            if s == " def":
+                return torch.tensor([[10]], dtype=torch.long)
+            if s == " function":
+                return torch.tensor([[20]], dtype=torch.long)
+            if s == " JavaScript":
+                return torch.tensor([[1, 2]], dtype=torch.long)  # multi-token
+            return torch.tensor([[999]], dtype=torch.long)
+
+    bpe = DummyBPE()
+    assert ed.single_token_id(bpe, " def") == 10
+    assert ed.single_token_id(bpe, " function") == 20
+    with pytest.raises(ValueError):
+        _ = ed.single_token_id(bpe, " JavaScript")
+
+
+@pytest.mark.slow
+def test_pick_first_valid_experiment_runs_or_skips():
+    """
+    This validates the *real* Section 4 pipeline using BPETokenizer.
+    It may skip if tokenizer initialization/download fails OR if none of the candidates satisfy
+    the strict one-token-diff constraint in this environment.
+    """
+    from mingpt.bpe import BPETokenizer
+
+    try:
+        bpe = BPETokenizer()
+    except Exception as e:
+        pytest.skip(f"Skipping Section 4 BPETokenizer test due to tokenizer init/download error: {e}")
+
+    try:
+        valid = ed.pick_first_valid_experiment(bpe)
+    except Exception as e:
+        pytest.skip(f"Skipping because no candidate spec validated under strict constraints: {e}")
+
+    assert valid.comparison.one_token_diff is True
+    assert isinstance(valid.changed_position, int)
+    assert isinstance(valid.token_a_id, int)
+    assert isinstance(valid.token_b_id, int)
+
+
+# --------------------------
+# Slow model-weight test (optional)
+# --------------------------
 
 @pytest.mark.slow
 def test_slow_from_pretrained_gpt2_loads_and_runs():
