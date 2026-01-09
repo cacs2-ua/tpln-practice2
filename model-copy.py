@@ -12,7 +12,7 @@ import math
 
 import torch
 import torch.nn as nn
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from torch.nn import functional as F
 
 from mingpt.utils import CfgNode as CN
@@ -171,6 +171,7 @@ class GPT(nn.Module):
 
         # last-token logits (Section 6): logits at final prompt position (next-token distribution)
         self.last_logits: Optional[torch.Tensor] = None
+        self.last_patch: Optional[Tuple[int, int]] = None
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -281,58 +282,138 @@ class GPT(nn.Module):
         record_activations: bool = False,
         cache_activations: bool = False,
         overwrite_cache: bool = False,
+        layer_to_patch: Optional[int] = None,
+        position_to_patch: Optional[int] = None,
     ):
         """
-        Forward pass with optional activation recording (Section 5).
+        Forward pass with:
+        - optional activation recording (Section 5)
+        - optional clean activation caching (Section 5)
+        - last-position logits extraction (Section 6)
+        - activation patching (Section 7)
 
-        Activation definition (standardized for this assignment):
-          - residual stream output AFTER each transformer block
-          - recorded for each token position
-          - stored for batch element 0 only
-          - deep-copied via detach().clone()
+        Activation definition:
+        - residual stream output AFTER each transformer block
+        - recorded for each token position
+        - stored for batch element 0 only
+        - deep-copied via detach().clone()
 
-        Storage:
-          - self.clean_activations: persistent "clean run cache" (read later for patching)
-          - self.last_activations: last recorded activations (debug/inspection)
+        Patching semantics (Section 7):
+        - if (layer_to_patch, position_to_patch) provided,
+            after block `layer_to_patch` produces x, replace ONLY:
+                x[0, position_to_patch, :] <- clean_activations[layer_to_patch][position_to_patch]
+            then continue forward normally.
+        - exactly ONE (layer, position) patch per run.
+        - patched/corrupted runs MUST NOT overwrite clean cache.
         """
         # If we're caching, we must record
         record_activations = bool(record_activations or cache_activations)
+
+        # Reset per-run outputs (safe defaults)
+        self.last_activations = None
+        self.last_logits = None
+        self.last_patch = None
+
+        # --- Patch argument validation (isolation + safety) ---
+        patch_requested = (layer_to_patch is not None) or (position_to_patch is not None)
+        if patch_requested:
+            # must provide BOTH
+            if (layer_to_patch is None) or (position_to_patch is None):
+                raise ValueError("Patching requires BOTH layer_to_patch and position_to_patch (or neither).")
+
+            # do not allow writing the clean cache during patched runs (clean-cache safety)
+            if cache_activations:
+                raise RuntimeError(
+                    "Refusing to run patching with cache_activations=True. "
+                    "Clean cache must only be written during the clean run."
+                )
+            if overwrite_cache:
+                raise RuntimeError(
+                    "overwrite_cache=True is not allowed during patching runs. "
+                    "Clean cache must remain immutable during corrupted/patched runs."
+                )
+
+            # must already have a clean cache
+            if self.clean_activations is None:
+                raise RuntimeError(
+                    "No clean activation cache found (self.clean_activations is None). "
+                    "Run a CLEAN pass first with cache_activations=True."
+                )
 
         device = idx.device
         b, t = idx.size()
         assert t <= self.block_size, f"Cannot forward sequence of length {t}, block size is only {self.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device).unsqueeze(0)  # (1, t)
 
-        # Clear last_activations to avoid stale reads
-        self.last_activations = None
-
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx)  # (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos)  # (1, t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
 
+        # Prepare activation container (optional)
         acts = None
         if record_activations:
             acts = []  # list[layer][pos] -> Tensor(d_model)
 
+        # Extra patch compatibility checks once seq_len is known
+        if patch_requested:
+            n_layer = len(self.transformer.h)
+
+            if not (0 <= int(layer_to_patch) < n_layer):
+                raise IndexError(f"layer_to_patch out of range: {layer_to_patch} (valid: 0..{n_layer-1})")
+            if not (0 <= int(position_to_patch) < t):
+                raise IndexError(f"position_to_patch out of range: {position_to_patch} (valid: 0..{t-1})")
+
+            # Check cache dimensions match current run
+            if len(self.clean_activations) != n_layer:
+                raise RuntimeError(
+                    f"Clean cache layer count mismatch: cache has {len(self.clean_activations)} "
+                    f"but model has {n_layer} layers."
+                )
+            cached_t = len(self.clean_activations[0]) if n_layer > 0 else 0
+            if cached_t != t:
+                raise RuntimeError(
+                    f"Sequence length mismatch vs clean cache: clean cache T={cached_t}, current T={t}. "
+                    "Clean and corrupted prompts must have identical token length, "
+                    "and you must re-cache clean activations if the prompt length changes."
+                )
+
+        patch_applied = False
+
+        # --- Transformer block stack ---
         for layer_idx, block in enumerate(self.transformer.h):
             x = block(x)
 
+            # --- Section 7: apply patch exactly after the chosen layer output ---
+            if patch_requested and (layer_idx == int(layer_to_patch)):
+                clean_vec = self.clean_activations[layer_idx][int(position_to_patch)]
+                # Ensure device/dtype compatibility
+                clean_vec = clean_vec.to(device=x.device, dtype=x.dtype)
+                # Copy values into the residual stream at exactly one token position
+                x[0, int(position_to_patch), :].copy_(clean_vec)
+
+                patch_applied = True
+                self.last_patch = (int(layer_to_patch), int(position_to_patch))
+
+            # --- Section 5: record activations AFTER patching (so next layer consumes the patched value) ---
             if record_activations:
-                # store ONLY batch element 0
                 layer_acts = []
                 for p in range(t):
-                    # defensive copy: detach + clone
                     layer_acts.append(x[0, p, :].detach().clone())
                 acts.append(layer_acts)
 
+        if patch_requested and (not patch_applied):
+            # With correct indices this should never happen, but it guards refactors.
+            raise RuntimeError("Patch was requested but not applied (internal logic error).")
+
+        # --- Final norm + LM head ---
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
 
         # --- Section 6: store last-position logits (next-token distribution after the prompt) ---
-        # Shape: (B, vocab_size). We detach+clone to avoid accidental mutation across runs.
         self.last_logits = logits[:, -1, :].detach().clone()
-        # if we are given some desired targets also calculate the loss
+
+        # loss (optional)
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
@@ -341,6 +422,7 @@ class GPT(nn.Module):
         if record_activations:
             self.last_activations = acts
 
+        # write clean cache ONLY when explicitly requested
         if cache_activations:
             if (self.clean_activations is not None) and (not overwrite_cache):
                 raise RuntimeError(
@@ -353,10 +435,11 @@ class GPT(nn.Module):
             self.clean_activation_meta = {
                 "seq_len": int(t),
                 "n_layer": int(len(self.transformer.h)),
-                "d_model": int(logits.shape[-1] if False else x.shape[-1]),  # x is (b,t,d_model) here pre-ln_f? ln_f preserves size
+                "d_model": int(x.shape[-1]),
             }
 
         return logits, loss
+
 
 
     @torch.no_grad()
