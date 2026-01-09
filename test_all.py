@@ -1,5 +1,8 @@
+import inspect
 import pathlib
 import sys
+from dataclasses import dataclass
+from typing import Dict
 
 import pytest
 import torch
@@ -13,14 +16,10 @@ import mingpt
 import mingpt.model
 from mingpt.model import GPT
 
-# --------------------------
-# Section 2 tests (repo orientation)
-# --------------------------
 
-import inspect
-from dataclasses import dataclass
-from typing import Dict
-
+# --------------------------
+# Section 2: repo orientation sanity
+# --------------------------
 
 @dataclass(frozen=True)
 class ForwardLandmarks:
@@ -54,11 +53,11 @@ def forward_source() -> str:
 
 
 def find_forward_landmarks(src: str) -> ForwardLandmarks:
-    has_tok_emb = "tok_emb" in src and "wte" in src
-    has_pos_emb = "pos_emb" in src and "wpe" in src
-    has_blocks_loop = ("for block in self.transformer.h" in src) or ("for layer_idx, block in enumerate(self.transformer.h" in src)
+    has_tok_emb = ("tok_emb" in src) and ("wte" in src)
+    has_pos_emb = ("pos_emb" in src) and ("wpe" in src)
+    has_blocks_loop = ("for block in self.transformer.h" in src) or ("enumerate(self.transformer.h" in src)
     has_ln_f = "ln_f" in src
-    has_lm_head = "lm_head" in src and "logits" in src
+    has_lm_head = ("lm_head" in src) and ("logits" in src)
     return ForwardLandmarks(
         has_tok_emb=has_tok_emb,
         has_pos_emb=has_pos_emb,
@@ -101,8 +100,7 @@ def test_fast_forward_and_generate_from_scratch():
     cfg.model_type = "gpt-nano"
     cfg.vocab_size = 1000
     cfg.block_size = 64
-    model = GPT(cfg)
-    model.eval()
+    model = GPT(cfg).eval()
 
     idx = torch.randint(0, cfg.vocab_size, (1, 10), dtype=torch.long)
     with torch.no_grad():
@@ -116,7 +114,7 @@ def test_fast_forward_and_generate_from_scratch():
 
 
 # --------------------------
-# Section 5 tests (activation recording / clean cache)
+# Shared helper for Section 5/6 tests
 # --------------------------
 
 def _make_tiny_gpt():
@@ -127,6 +125,10 @@ def _make_tiny_gpt():
     model = GPT(cfg).eval()
     return model, cfg
 
+
+# --------------------------
+# Section 5: activation recording / clean cache
+# --------------------------
 
 def test_section5_cache_structure_and_shapes():
     model, cfg = _make_tiny_gpt()
@@ -141,7 +143,6 @@ def test_section5_cache_structure_and_shapes():
     assert len(model.clean_activations) == len(model.transformer.h)  # n_layer
     assert len(model.clean_activations[0]) == T
 
-    # each [layer][pos] must be (d_model,)
     d_model = model.transformer.wte.weight.shape[1]
     a00 = model.clean_activations[0][0]
     assert tuple(a00.shape) == (d_model,)
@@ -156,7 +157,6 @@ def test_section5_cache_uses_detach_clone_not_views():
     with torch.no_grad():
         _ = model(idx, cache_activations=True, overwrite_cache=True)
 
-    # If we had stored views into the same underlying tensor, data_ptr() would often match.
     a0 = model.clean_activations[0][0]
     a1 = model.clean_activations[0][1]
     assert a0.data_ptr() != a1.data_ptr(), "Expected clone()d per-position tensors with distinct storage."
@@ -182,24 +182,20 @@ def test_section5_clean_cache_not_overwritten_unless_requested():
     with torch.no_grad():
         _ = model(idx1, cache_activations=True, overwrite_cache=True)
 
-    # snapshot values
     snap = [[t.clone() for t in layer] for layer in model.clean_activations]
 
-    # normal forward must not change cache
     with torch.no_grad():
         _ = model(idx2)
     for L in range(len(snap)):
         for p in range(len(snap[L])):
             assert torch.equal(model.clean_activations[L][p], snap[L][p])
 
-    # recording-only must not change clean cache
     with torch.no_grad():
         _ = model(idx2, record_activations=True, cache_activations=False)
     for L in range(len(snap)):
         for p in range(len(snap[L])):
             assert torch.equal(model.clean_activations[L][p], snap[L][p])
 
-    # caching again WITHOUT overwrite must raise
     with pytest.raises(RuntimeError):
         with torch.no_grad():
             _ = model(idx2, cache_activations=True, overwrite_cache=False)
@@ -218,7 +214,6 @@ def test_section5_batch_behavior_records_only_first_element():
         _ = model1(idx_batch, cache_activations=True, overwrite_cache=True)
         _ = model2(idx_first, cache_activations=True, overwrite_cache=True)
 
-    # caches must match up to floating-point tolerance
     for L in range(len(model1.clean_activations)):
         for p in range(T):
             assert torch.allclose(
@@ -228,3 +223,52 @@ def test_section5_batch_behavior_records_only_first_element():
                 atol=1e-6,
             )
 
+
+# --------------------------
+# Section 6: last-token logits extraction (NEW)
+# --------------------------
+
+def test_section6_last_logits_exists_and_matches_last_position_logits():
+    model, cfg = _make_tiny_gpt()
+    T = 11
+    idx = torch.randint(0, cfg.vocab_size, (1, T), dtype=torch.long)
+
+    with torch.no_grad():
+        logits, _ = model(idx)
+
+    assert hasattr(model, "last_logits"), "Expected GPT to expose model.last_logits"
+    assert model.last_logits is not None, "model.last_logits was not set by forward()"
+    assert tuple(model.last_logits.shape) == (1, cfg.vocab_size)
+
+    expected = logits[:, -1, :]
+    assert torch.allclose(model.last_logits, expected), "model.last_logits must equal logits[:, -1, :] for the same run"
+
+
+def test_section6_last_logits_is_detached_and_cloned():
+    model, cfg = _make_tiny_gpt()
+    T = 7
+    idx = torch.randint(0, cfg.vocab_size, (1, T), dtype=torch.long)
+
+    with torch.no_grad():
+        logits, _ = model(idx)
+
+    view = logits[:, -1, :]  # view into logits storage
+    assert model.last_logits.requires_grad is False
+    # clone must not share underlying storage with the view
+    assert model.last_logits.data_ptr() != view.data_ptr(), "Expected last_logits to be a clone(), not a view"
+
+
+def test_section6_last_logits_computed_even_when_recording_or_caching():
+    model, cfg = _make_tiny_gpt()
+    T = 9
+    idx = torch.randint(0, cfg.vocab_size, (1, T), dtype=torch.long)
+
+    with torch.no_grad():
+        logits_a, _ = model(idx, record_activations=True, cache_activations=False)
+    assert model.last_logits is not None
+    assert torch.allclose(model.last_logits, logits_a[:, -1, :])
+
+    with torch.no_grad():
+        logits_b, _ = model(idx, cache_activations=True, overwrite_cache=True)
+    assert model.last_logits is not None
+    assert torch.allclose(model.last_logits, logits_b[:, -1, :])
