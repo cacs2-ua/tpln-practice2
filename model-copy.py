@@ -169,6 +169,8 @@ class GPT(nn.Module):
         self.last_activations: Optional[List[List[torch.Tensor]]] = None
 
 
+        # last-token logits (Section 6): logits at final prompt position (next-token distribution)
+        self.last_logits: Optional[torch.Tensor] = None
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -327,6 +329,9 @@ class GPT(nn.Module):
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
 
+        # --- Section 6: store last-position logits (next-token distribution after the prompt) ---
+        # Shape: (B, vocab_size). We detach+clone to avoid accidental mutation across runs.
+        self.last_logits = logits[:, -1, :].detach().clone()
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
