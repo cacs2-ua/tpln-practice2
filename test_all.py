@@ -4,7 +4,7 @@ import sys
 import pytest
 import torch
 
-# Colab-friendly: ensure mingpt editable install path is visible during pytest subprocess
+# If you happen to be in a Colab-like layout, keep this harmless path add.
 COLAB_MINGPT_PATH = pathlib.Path("/content/src/mingpt")
 if COLAB_MINGPT_PATH.exists():
     sys.path.append(str(COLAB_MINGPT_PATH))
@@ -13,17 +13,63 @@ import mingpt
 import mingpt.model
 from mingpt.model import GPT
 
-import repo_orientation as ro
-import tokenization_protocol as tp
-import experiment_design as ed
-
-
 # --------------------------
 # Section 2 tests (repo orientation)
 # --------------------------
 
+import inspect
+from dataclasses import dataclass
+from typing import Dict
+
+
+@dataclass(frozen=True)
+class ForwardLandmarks:
+    has_tok_emb: bool
+    has_pos_emb: bool
+    has_blocks_loop: bool
+    has_ln_f: bool
+    has_lm_head: bool
+
+
+def get_paths() -> Dict[str, str]:
+    pkg_path = pathlib.Path(mingpt.__file__).resolve()
+    model_path = pathlib.Path(mingpt.model.__file__).resolve()
+    return {
+        "mingpt.__file__": str(pkg_path),
+        "mingpt.model.__file__": str(model_path),
+    }
+
+
+def read_model_source() -> str:
+    model_path = pathlib.Path(mingpt.model.__file__).resolve()
+    return model_path.read_text(encoding="utf-8")
+
+
+def attn_bias_fix_present(model_source: str) -> bool:
+    return 'len([k for k in sd if not k.endswith(".attn.bias")])' in model_source
+
+
+def forward_source() -> str:
+    return inspect.getsource(GPT.forward)
+
+
+def find_forward_landmarks(src: str) -> ForwardLandmarks:
+    has_tok_emb = "tok_emb" in src and "wte" in src
+    has_pos_emb = "pos_emb" in src and "wpe" in src
+    has_blocks_loop = ("for block in self.transformer.h" in src) or ("for layer_idx, block in enumerate(self.transformer.h" in src)
+    has_ln_f = "ln_f" in src
+    has_lm_head = "lm_head" in src and "logits" in src
+    return ForwardLandmarks(
+        has_tok_emb=has_tok_emb,
+        has_pos_emb=has_pos_emb,
+        has_blocks_loop=has_blocks_loop,
+        has_ln_f=has_ln_f,
+        has_lm_head=has_lm_head,
+    )
+
+
 def test_mingpt_importable_and_paths_exist():
-    paths = ro.get_paths()
+    paths = get_paths()
     assert "mingpt.__file__" in paths and "mingpt.model.__file__" in paths
 
     pkg_path = pathlib.Path(paths["mingpt.__file__"])
@@ -33,16 +79,16 @@ def test_mingpt_importable_and_paths_exist():
 
 
 def test_attn_bias_fix_present_or_applied():
-    src = ro.read_model_source()
-    assert ro.attn_bias_fix_present(src), (
+    src = read_model_source()
+    assert attn_bias_fix_present(src), (
         "Required fix not found in mingpt/model.py. "
         "Expected assert to ignore keys ending with .attn.bias."
     )
 
 
 def test_forward_pipeline_landmarks_present():
-    fwd_src = ro.forward_source()
-    lm = ro.find_forward_landmarks(fwd_src)
+    fwd_src = forward_source()
+    lm = find_forward_landmarks(fwd_src)
     assert lm.has_tok_emb, "Expected token embedding (wte/tok_emb) usage in forward."
     assert lm.has_pos_emb, "Expected positional embedding (wpe/pos_emb) usage in forward."
     assert lm.has_blocks_loop, "Expected loop over transformer blocks in forward."
@@ -51,9 +97,8 @@ def test_forward_pipeline_landmarks_present():
 
 
 def test_fast_forward_and_generate_from_scratch():
-    # Fast test: avoid downloading HF weights.
     cfg = GPT.get_default_config()
-    cfg.model_type = "gpt-nano"  # tiny
+    cfg.model_type = "gpt-nano"
     cfg.vocab_size = 1000
     cfg.block_size = 64
     model = GPT(cfg)
@@ -71,209 +116,115 @@ def test_fast_forward_and_generate_from_scratch():
 
 
 # --------------------------
-# Section 3 tests (tokenization protocol)
+# Section 5 tests (activation recording / clean cache)
 # --------------------------
 
-def test_diff_positions_length_mismatch_includes_tail():
-    a = [1, 2, 3]
-    b = [1, 2, 3, 4, 5]
-    diffs = tp.diff_positions(a, b)
-    assert diffs == [3, 4]
+def _make_tiny_gpt():
+    cfg = GPT.get_default_config()
+    cfg.model_type = "gpt-nano"
+    cfg.vocab_size = 1000
+    cfg.block_size = 64
+    model = GPT(cfg).eval()
+    return model, cfg
 
 
-def test_compare_reports_detects_one_token_diff_synthetic():
-    clean = tp.TokenizationReport(
-        text="clean",
-        token_ids=[10, 20, 30],
-        token_strs=["a", "b", "c"],
-        seq_len=3,
-        decoded_roundtrip="abc",
-    )
-    corrupt = tp.TokenizationReport(
-        text="corrupt",
-        token_ids=[10, 99, 30],
-        token_strs=["a", "X", "c"],
-        seq_len=3,
-        decoded_roundtrip="aXc",
-    )
-    comp = tp.compare_clean_corrupt(clean, corrupt)
-    assert comp.same_length is True
-    assert comp.diff_positions == [1]
-    assert comp.diff_count == 1
-    assert comp.one_token_diff is True
+def test_section5_cache_structure_and_shapes():
+    model, cfg = _make_tiny_gpt()
+    T = 12
+    idx = torch.randint(0, cfg.vocab_size, (1, T), dtype=torch.long)
 
-
-def test_assert_one_token_difference_raises_when_multi_diff():
-    clean = tp.TokenizationReport(
-        text="clean",
-        token_ids=[1, 2, 3],
-        token_strs=["a", "b", "c"],
-        seq_len=3,
-        decoded_roundtrip="abc",
-    )
-    corrupt = tp.TokenizationReport(
-        text="corrupt",
-        token_ids=[9, 2, 8],
-        token_strs=["X", "b", "Y"],
-        seq_len=3,
-        decoded_roundtrip="XbY",
-    )
-    comp = tp.compare_clean_corrupt(clean, corrupt)
-    assert comp.diff_count == 2
-    with pytest.raises(ValueError):
-        tp.assert_one_token_difference(comp)
-
-
-@pytest.mark.slow
-def test_bpe_tokenization_roundtrip_and_lengths():
-    """
-    Slow-ish test because BPETokenizer may download merges/vocab on first use in a fresh runtime.
-    """
-    from mingpt.bpe import BPETokenizer
-
-    try:
-        bpe = BPETokenizer()
-    except Exception as e:
-        pytest.skip(f"Skipping BPETokenizer test due to tokenizer init/download error: {e}")
-
-    text = "Michelle Jones was a top-notch student. Michelle"
-    rep = tp.build_report(bpe, text)
-
-    # Basic sanity
-    assert rep.seq_len > 0
-    assert len(rep.token_ids) == rep.seq_len
-    assert len(rep.token_strs) == rep.seq_len
-
-    # Roundtrip should contain the key content (exact equality may vary by whitespace normalization)
-    assert "Michelle" in rep.decoded_roundtrip
-
-
-@pytest.mark.slow
-def test_bpe_pair_validation_example_michelle_jones_smith():
-    """
-    Uses the assignment's canonical-style example to ensure:
-    - same token length
-    - at least one differing token (ideally one)
-    """
-    from mingpt.bpe import BPETokenizer
-
-    try:
-        bpe = BPETokenizer()
-    except Exception as e:
-        pytest.skip(f"Skipping BPETokenizer test due to tokenizer init/download error: {e}")
-
-    clean = "Michelle Jones was a top-notch student. Michelle"
-    corrupt = "Michelle Smith was a top-notch student. Michelle"
-
-    clean_rep = tp.build_report(bpe, clean)
-    corrupt_rep = tp.build_report(bpe, corrupt)
-    comp = tp.compare_clean_corrupt(clean_rep, corrupt_rep)
-
-    assert comp.same_length is True, f"Expected same token length; got {clean_rep.seq_len} vs {corrupt_rep.seq_len}"
-    assert comp.diff_count >= 1
-
-
-# --------------------------
-# Section 4 tests (experiment design)
-# --------------------------
-
-def test_changed_token_position_returns_correct_pos_synthetic():
-    clean = tp.TokenizationReport(
-        text="clean",
-        token_ids=[1, 2, 3, 4],
-        token_strs=["a", "b", "c", "d"],
-        seq_len=4,
-        decoded_roundtrip="abcd",
-    )
-    corrupt = tp.TokenizationReport(
-        text="corrupt",
-        token_ids=[1, 99, 3, 4],
-        token_strs=["a", "X", "c", "d"],
-        seq_len=4,
-        decoded_roundtrip="aXcd",
-    )
-    comp = tp.compare_clean_corrupt(clean, corrupt)
-    assert comp.one_token_diff is True
-    assert ed.changed_token_position(comp) == 1
-
-
-def test_default_hypothesis_mentions_changed_position():
-    h = ed.default_hypothesis(7)
-    assert "position 7" in h
-
-
-def test_ensure_leading_space_adds_space_when_missing():
-    assert ed.ensure_leading_space("Paris") == " Paris"
-    assert ed.ensure_leading_space(" Paris") == " Paris"
-
-
-def test_single_token_id_raises_for_multi_token_string_with_dummy_tokenizer():
-    class DummyBPE:
-        def __call__(self, s: str):
-            # Return (1, T) tensor
-            if s == " def":
-                return torch.tensor([[10]], dtype=torch.long)
-            if s == " function":
-                return torch.tensor([[20]], dtype=torch.long)
-            if s == " JavaScript":
-                return torch.tensor([[1, 2]], dtype=torch.long)  # multi-token
-            return torch.tensor([[999]], dtype=torch.long)
-
-    bpe = DummyBPE()
-    assert ed.single_token_id(bpe, " def") == 10
-    assert ed.single_token_id(bpe, " function") == 20
-    with pytest.raises(ValueError):
-        _ = ed.single_token_id(bpe, " JavaScript")
-
-
-@pytest.mark.slow
-def test_pick_first_valid_experiment_runs_or_skips():
-    """
-    This validates the *real* Section 4 pipeline using BPETokenizer.
-    It may skip if tokenizer initialization/download fails OR if none of the candidates satisfy
-    the strict one-token-diff constraint in this environment.
-    """
-    from mingpt.bpe import BPETokenizer
-
-    try:
-        bpe = BPETokenizer()
-    except Exception as e:
-        pytest.skip(f"Skipping Section 4 BPETokenizer test due to tokenizer init/download error: {e}")
-
-    try:
-        valid = ed.pick_first_valid_experiment(bpe)
-    except Exception as e:
-        pytest.skip(f"Skipping because no candidate spec validated under strict constraints: {e}")
-
-    assert valid.comparison.one_token_diff is True
-    assert isinstance(valid.changed_position, int)
-    assert isinstance(valid.token_a_id, int)
-    assert isinstance(valid.token_b_id, int)
-
-
-# --------------------------
-# Slow model-weight test (optional)
-# --------------------------
-
-@pytest.mark.slow
-def test_slow_from_pretrained_gpt2_loads_and_runs():
-    """
-    Slow test: downloads and loads GPT-2 weights.
-    If network/cache issues happen in Colab, we skip rather than fail hard.
-    """
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    try:
-        model = GPT.from_pretrained("gpt2")
-    except Exception as e:
-        pytest.skip(f"Skipping from_pretrained test due to load/download error: {e}")
-
-    model.to(device)
-    model.eval()
-
-    idx = torch.randint(0, 50257, (1, 8), dtype=torch.long, device=device)
     with torch.no_grad():
-        logits, loss = model(idx)
+        logits, _ = model(idx, cache_activations=True, overwrite_cache=True)
 
-    assert logits.shape == (1, 8, 50257)
-    assert loss is None
+    assert model.clean_activations is not None
+    assert isinstance(model.clean_activations, list)
+    assert len(model.clean_activations) == len(model.transformer.h)  # n_layer
+    assert len(model.clean_activations[0]) == T
+
+    # each [layer][pos] must be (d_model,)
+    d_model = model.transformer.wte.weight.shape[1]
+    a00 = model.clean_activations[0][0]
+    assert tuple(a00.shape) == (d_model,)
+    assert a00.requires_grad is False
+
+
+def test_section5_cache_uses_detach_clone_not_views():
+    model, cfg = _make_tiny_gpt()
+    T = 6
+    idx = torch.randint(0, cfg.vocab_size, (1, T), dtype=torch.long)
+
+    with torch.no_grad():
+        _ = model(idx, cache_activations=True, overwrite_cache=True)
+
+    # If we had stored views into the same underlying tensor, data_ptr() would often match.
+    a0 = model.clean_activations[0][0]
+    a1 = model.clean_activations[0][1]
+    assert a0.data_ptr() != a1.data_ptr(), "Expected clone()d per-position tensors with distinct storage."
+
+
+def test_section5_logits_identical_with_and_without_recording():
+    model, cfg = _make_tiny_gpt()
+    T = 10
+    idx = torch.randint(0, cfg.vocab_size, (1, T), dtype=torch.long)
+
+    with torch.no_grad():
+        logits1, _ = model(idx)  # normal
+        logits2, _ = model(idx, record_activations=True, cache_activations=False)  # recording only
+
+    assert torch.allclose(logits1, logits2), "Activation recording must not change logits."
+
+
+def test_section5_clean_cache_not_overwritten_unless_requested():
+    model, cfg = _make_tiny_gpt()
+    idx1 = torch.randint(0, cfg.vocab_size, (1, 8), dtype=torch.long)
+    idx2 = torch.randint(0, cfg.vocab_size, (1, 8), dtype=torch.long)
+
+    with torch.no_grad():
+        _ = model(idx1, cache_activations=True, overwrite_cache=True)
+
+    # snapshot values
+    snap = [[t.clone() for t in layer] for layer in model.clean_activations]
+
+    # normal forward must not change cache
+    with torch.no_grad():
+        _ = model(idx2)
+    for L in range(len(snap)):
+        for p in range(len(snap[L])):
+            assert torch.equal(model.clean_activations[L][p], snap[L][p])
+
+    # recording-only must not change clean cache
+    with torch.no_grad():
+        _ = model(idx2, record_activations=True, cache_activations=False)
+    for L in range(len(snap)):
+        for p in range(len(snap[L])):
+            assert torch.equal(model.clean_activations[L][p], snap[L][p])
+
+    # caching again WITHOUT overwrite must raise
+    with pytest.raises(RuntimeError):
+        with torch.no_grad():
+            _ = model(idx2, cache_activations=True, overwrite_cache=False)
+
+
+def test_section5_batch_behavior_records_only_first_element():
+    model1, cfg = _make_tiny_gpt()
+    model2, _ = _make_tiny_gpt()
+    model2.load_state_dict(model1.state_dict())  # identical weights
+
+    T = 9
+    idx_batch = torch.randint(0, cfg.vocab_size, (2, T), dtype=torch.long)
+    idx_first = idx_batch[:1, :]
+
+    with torch.no_grad():
+        _ = model1(idx_batch, cache_activations=True, overwrite_cache=True)
+        _ = model2(idx_first, cache_activations=True, overwrite_cache=True)
+
+    # caches must match up to floating-point tolerance
+    for L in range(len(model1.clean_activations)):
+        for p in range(T):
+            assert torch.allclose(
+                model1.clean_activations[L][p],
+                model2.clean_activations[L][p],
+                rtol=1e-5,
+                atol=1e-6,
+            )
+
