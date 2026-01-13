@@ -1,0 +1,22 @@
+{
+  "metric_title": "Logit difference heatmap: logit(' Smith') − logit(' Jones')",
+  "clean_text": "Michelle Jones was a top-notch student. Michelle",
+  "corrupt_text": "Michelle Smith was a top-notch student. Michelle",
+  "token_a_str": " Jones",
+  "token_b_str": " Smith",
+  "n_layers": 12,
+  "seq_len": 11,
+  "token_labels": [
+    "Michelle",
+    " Jones",
+    " was",
+    " a",
+    " top",
+    "-",
+    "not",
+    "ch",
+    " student",
+    ".",
+    " Michelle"
+  ]
+}

@@ -18,6 +18,8 @@ from section10_visualization import (
     save_heatmap_artifacts,
 )
 
+import tokenization_protocol as tp
+
 
 def get_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
@@ -41,6 +43,17 @@ def main() -> None:
     # Load model + tokenizer
     model = GPT.from_pretrained("gpt2").to(device).eval()
     bpe = BPETokenizer()
+
+    # Enforce the constraint: same length AND exactly one differing BPE token
+    comp = tp.validate_pair(
+        bpe=bpe,
+        clean_text=CLEAN_TEXT,
+        corrupt_text=CORRUPT_TEXT,
+        require_same_length=True,
+        require_one_token_diff=True,
+    )
+    print(tp.describe_pair(comp))
+    print("Changed token position:", comp.diff_positions[0])
 
     # Build the sweep matrix (Section 9)
     res = build_patching_sweep(
