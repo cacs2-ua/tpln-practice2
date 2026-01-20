@@ -172,6 +172,7 @@ class GPT(nn.Module):
         # last-token logits (Section 6): logits at final prompt position (next-token distribution)
         self.last_logits: Optional[torch.Tensor] = None
         self.last_patch: Optional[Tuple[int, int]] = None
+        self.last_patch_source: Optional[Tuple[int, int]] = None   # (source_layer, source_pos)
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -284,6 +285,9 @@ class GPT(nn.Module):
         overwrite_cache: bool = False,
         layer_to_patch: Optional[int] = None,
         position_to_patch: Optional[int] = None,
+        # NEW (EXTRA 1): wrong-source patch controls
+        source_layer: Optional[int] = None,
+        source_position: Optional[int] = None,
     ):
         """
         Forward pass with:
@@ -291,6 +295,7 @@ class GPT(nn.Module):
         - optional clean activation caching (Section 5)
         - last-position logits extraction (Section 6)
         - activation patching (Section 7)
+        - WRONG-SOURCE patching control (EXTRA 1)
 
         Activation definition:
         - residual stream output AFTER each transformer block
@@ -298,13 +303,12 @@ class GPT(nn.Module):
         - stored for batch element 0 only
         - deep-copied via detach().clone()
 
-        Patching semantics (Section 7):
-        - if (layer_to_patch, position_to_patch) provided,
-            after block `layer_to_patch` produces x, replace ONLY:
-                x[0, position_to_patch, :] <- clean_activations[layer_to_patch][position_to_patch]
-            then continue forward normally.
-        - exactly ONE (layer, position) patch per run.
-        - patched/corrupted runs MUST NOT overwrite clean cache.
+        Patching semantics:
+        Target (where we write): (layer_to_patch, position_to_patch) in the corrupted run
+        Source (what we copy): (source_layer, source_position) from clean cache
+
+        Standard patch is the special case:
+            source_layer == layer_to_patch and source_position == position_to_patch
         """
         # If we're caching, we must record
         record_activations = bool(record_activations or cache_activations)
@@ -313,13 +317,25 @@ class GPT(nn.Module):
         self.last_activations = None
         self.last_logits = None
         self.last_patch = None
+        self.last_patch_source = None
 
         # --- Patch argument validation (isolation + safety) ---
         patch_requested = (layer_to_patch is not None) or (position_to_patch is not None)
+        source_requested = (source_layer is not None) or (source_position is not None)
+
         if patch_requested:
-            # must provide BOTH
+            # must provide BOTH target coords
             if (layer_to_patch is None) or (position_to_patch is None):
                 raise ValueError("Patching requires BOTH layer_to_patch and position_to_patch (or neither).")
+
+            # if user provides any source coord, must provide BOTH
+            if source_requested and ((source_layer is None) or (source_position is None)):
+                raise ValueError("Wrong-source patching requires BOTH source_layer and source_position (or neither).")
+
+            # default: standard matching patch if source not provided
+            if not source_requested:
+                source_layer = layer_to_patch
+                source_position = position_to_patch
 
             # do not allow writing the clean cache during patched runs (clean-cache safety)
             if cache_activations:
@@ -359,10 +375,17 @@ class GPT(nn.Module):
         if patch_requested:
             n_layer = len(self.transformer.h)
 
+            # target checks
             if not (0 <= int(layer_to_patch) < n_layer):
                 raise IndexError(f"layer_to_patch out of range: {layer_to_patch} (valid: 0..{n_layer-1})")
             if not (0 <= int(position_to_patch) < t):
                 raise IndexError(f"position_to_patch out of range: {position_to_patch} (valid: 0..{t-1})")
+
+            # source checks
+            if not (0 <= int(source_layer) < n_layer):
+                raise IndexError(f"source_layer out of range: {source_layer} (valid: 0..{n_layer-1})")
+            if not (0 <= int(source_position) < t):
+                raise IndexError(f"source_position out of range: {source_position} (valid: 0..{t-1})")
 
             # Check cache dimensions match current run
             if len(self.clean_activations) != n_layer:
@@ -384,18 +407,18 @@ class GPT(nn.Module):
         for layer_idx, block in enumerate(self.transformer.h):
             x = block(x)
 
-            # --- Section 7: apply patch exactly after the chosen layer output ---
+            # --- Apply patch exactly after the chosen TARGET layer output ---
             if patch_requested and (layer_idx == int(layer_to_patch)):
-                clean_vec = self.clean_activations[layer_idx][int(position_to_patch)]
-                # Ensure device/dtype compatibility
+                clean_vec = self.clean_activations[int(source_layer)][int(source_position)]
                 clean_vec = clean_vec.to(device=x.device, dtype=x.dtype)
-                # Copy values into the residual stream at exactly one token position
+
                 x[0, int(position_to_patch), :].copy_(clean_vec)
 
                 patch_applied = True
                 self.last_patch = (int(layer_to_patch), int(position_to_patch))
+                self.last_patch_source = (int(source_layer), int(source_position))
 
-            # --- Section 5: record activations AFTER patching (so next layer consumes the patched value) ---
+            # --- record activations AFTER patching ---
             if record_activations:
                 layer_acts = []
                 for p in range(t):
@@ -403,14 +426,13 @@ class GPT(nn.Module):
                 acts.append(layer_acts)
 
         if patch_requested and (not patch_applied):
-            # With correct indices this should never happen, but it guards refactors.
             raise RuntimeError("Patch was requested but not applied (internal logic error).")
 
         # --- Final norm + LM head ---
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
 
-        # --- Section 6: store last-position logits (next-token distribution after the prompt) ---
+        # --- store last-position logits (next-token distribution after the prompt) ---
         self.last_logits = logits[:, -1, :].detach().clone()
 
         # loss (optional)
@@ -439,6 +461,7 @@ class GPT(nn.Module):
             }
 
         return logits, loss
+
 
 
 
