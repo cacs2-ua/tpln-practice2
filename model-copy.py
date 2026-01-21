@@ -485,26 +485,33 @@ class GPT(nn.Module):
 
         # --- Transformer block stack (EXTRA 3: split inside each block) ---
         for layer_idx, block in enumerate(self.transformer.h):
-            # 1) post-attention residual state
-            x_attn = x + block.attn(block.ln_1(x))
+            # 1) post-attention residual state (raw, BEFORE any post-attn patch)
+            x_attn_raw = x + block.attn(block.ln_1(x))
 
-            if loc == "post_attn":
-                if _apply_patch(x_attn, layer_idx=layer_idx):
+            # If patching at post_attn on the target layer, patch a CLONE so MLP still sees x_attn_raw (corrupt)
+            x_attn_state = x_attn_raw
+            if loc == "post_attn" and patch_requested and (layer_idx == int(layer_to_patch)):
+                x_attn_state = x_attn_raw.clone()
+                if _apply_patch(x_attn_state, layer_idx=layer_idx):
                     patch_applied = True
 
+            # record post-attn activations (after potential post-attn patch)
             if record_activations:
                 layer_acts_attn = []
                 for p in range(t):
-                    layer_acts_attn.append(x_attn[0, p, :].detach().clone())
+                    layer_acts_attn.append(x_attn_state[0, p, :].detach().clone())
                 acts_post_attn.append(layer_acts_attn)
 
-            # 2) post-MLP residual state (block output)
-            x_out = x_attn + block.mlpf(block.ln_2(x_attn))
+            # 2) MLP residual is computed from RAW x_attn (so post_attn patch doesn't change the MLP path)
+            mlp_resid = block.mlpf(block.ln_2(x_attn_raw))
+            x_out = x_attn_state + mlp_resid
 
+            # post-MLP patch happens on the block output
             if loc == "post_mlp":
                 if _apply_patch(x_out, layer_idx=layer_idx):
                     patch_applied = True
 
+            # record post-MLP activations
             if record_activations:
                 layer_acts_mlp = []
                 for p in range(t):
