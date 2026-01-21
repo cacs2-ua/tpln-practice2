@@ -101,9 +101,6 @@ def main() -> None:
     if not saved_path.exists():
         raise FileNotFoundError(f"Saved matrix not found: {saved_path.resolve()}")
 
-    # -----------------------
-    # Load matrix (+ whatever metadata exists)
-    # -----------------------
     matrix, saved_meta = _load_saved_matrix(saved_path)
     n_layers, T = int(matrix.shape[0]), int(matrix.shape[1])
     print(f"Loaded {saved_path} with matrix shape {tuple(matrix.shape)}")
@@ -117,9 +114,6 @@ def main() -> None:
     saved_clean_score = saved_meta.get("clean_score", float("nan"))
     saved_corrupt_score = saved_meta.get("corrupt_score", float("nan"))
 
-    # -----------------------
-    # Recompute baselines (robust for report), but keep saved values if you prefer
-    # -----------------------
     model = GPT.from_pretrained("gpt2").to(device).eval()
     bpe = BPETokenizer()
 
@@ -160,9 +154,7 @@ def main() -> None:
         except Exception:
             pass
 
-    # -----------------------
     # Optional: x-axis token labels
-    # -----------------------
     token_labels: Optional[list[str]] = None
     if args.show_token_strs:
         labels_raw = decode_prompt_token_labels(bpe, CORRUPT_TEXT)  # labels should match the prompt used for the matrix
@@ -188,9 +180,6 @@ def main() -> None:
     # Save matrix + metadata for reproducibility
     save_heatmap_artifacts(out_dir=out_dir, matrix=matrix, meta=meta)
 
-    # -----------------------
-    # Section 10 deliverable: main heatmap (MATSHOW) + centered diverging norm
-    # -----------------------
     fig, ax = plot_logit_diff_heatmap(
         matrix,
         token_labels=token_labels,
@@ -205,9 +194,7 @@ def main() -> None:
     saved = save_figure_publication_quality(fig, out_basepath=fig_base, formats=("png", "pdf"), dpi=300)
     plt.close(fig)
 
-    # -----------------------
-    # Optional: delta heatmap (patched - corrupt) for interpretability/debug
-    # -----------------------
+    # Delta heatmap (patched - corrupt) for interpretability/debug
     if args.also_delta:
         delta = matrix - float(corrupt_score)
         max_abs = float(delta.abs().max())
