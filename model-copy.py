@@ -313,8 +313,8 @@ class GPT(nn.Module):
         - WRONG-SOURCE patching control (EXTRA 1)
         - INTRA-BLOCK patching location (EXTRA 3): post-attention vs post-MLP
 
-        Activation definition (standardized residual stream states):
-        - post_attn: residual stream AFTER attention residual add
+        Activation definition (standardized intra-block states):
+        - post_attn: attention sublayer OUTPUT (delta) BEFORE adding the residual
         - post_mlp: residual stream AFTER MLP residual add (block output)
 
         Patching semantics:
@@ -483,35 +483,40 @@ class GPT(nn.Module):
 
         patch_applied = False
 
+               # --- Transformer block stack (EXTRA 3: split inside each block) ---
         # --- Transformer block stack (EXTRA 3: split inside each block) ---
         for layer_idx, block in enumerate(self.transformer.h):
-            # 1) post-attention residual state (raw, BEFORE any post-attn patch)
-            x_attn_raw = x + block.attn(block.ln_1(x))
 
-            # If patching at post_attn on the target layer, patch a CLONE so MLP still sees x_attn_raw (corrupt)
-            x_attn_state = x_attn_raw
+            # 1) Attention sublayer OUTPUT (delta), BEFORE residual add
+            attn_delta = block.attn(block.ln_1(x))  # (B, T, C)
+
+            # post-attn patch: patch the ATTENTION DELTA (not the residual stream)
             if loc == "post_attn" and patch_requested and (layer_idx == int(layer_to_patch)):
-                x_attn_state = x_attn_raw.clone()
-                if _apply_patch(x_attn_state, layer_idx=layer_idx):
+                attn_delta = attn_delta.clone()
+                if _apply_patch(attn_delta, layer_idx=layer_idx):
                     patch_applied = True
 
-            # record post-attn activations (after potential post-attn patch)
+            # record post-attn activations (store attn_delta)
             if record_activations:
                 layer_acts_attn = []
                 for p in range(t):
-                    layer_acts_attn.append(x_attn_state[0, p, :].detach().clone())
+                    layer_acts_attn.append(attn_delta[0, p, :].detach().clone())
                 acts_post_attn.append(layer_acts_attn)
 
-            # 2) MLP residual is computed from RAW x_attn (so post_attn patch doesn't change the MLP path)
-            mlp_resid = block.mlpf(block.ln_2(x_attn_raw))
-            x_out = x_attn_state + mlp_resid
+            # 2) Residual add after attention
+            x_attn = x + attn_delta
 
-            # post-MLP patch happens on the block output
-            if loc == "post_mlp":
+            # 3) MLP sublayer (delta) + residual add
+            mlp_delta = block.mlpf(block.ln_2(x_attn))
+            x_out = x_attn + mlp_delta  # block output (post-MLP)
+
+            # post-MLP patch: patch block output
+            if loc == "post_mlp" and patch_requested and (layer_idx == int(layer_to_patch)):
+                x_out = x_out.clone()
                 if _apply_patch(x_out, layer_idx=layer_idx):
                     patch_applied = True
 
-            # record post-MLP activations
+            # record post-MLP activations (store x_out)
             if record_activations:
                 layer_acts_mlp = []
                 for p in range(t):
