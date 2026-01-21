@@ -1,5 +1,5 @@
 """
-Section 10) Visualization: Heatmap Generation and Presentation Standards
+Visualization: Heatmap Generation and Presentation Standards
 
 This module:
 - plots a (n_layers, seq_len) matrix as a heatmap using matplotlib (matshow)
@@ -118,10 +118,15 @@ def plot_logit_diff_heatmap(
 
     norm = None
     if center_zero:
-        _vmin = float(m.min()) if vmin is None else float(vmin)
-        _vmax = float(m.max()) if vmax is None else float(vmax)
-        if _vmin == _vmax:
-            _vmin, _vmax = _vmin - 1.0, _vmax + 1.0
+        data_min = float(m.min()) if vmin is None else float(vmin)
+        data_max = float(m.max()) if vmax is None else float(vmax)
+
+        # If data doesn't straddle 0, make a symmetric range around 0
+        max_abs = max(abs(data_min), abs(data_max))
+        if max_abs == 0.0:
+            max_abs = 1.0  # avoid degenerate norm
+
+        _vmin, _vmax = -max_abs, max_abs
         norm = TwoSlopeNorm(vcenter=0.0, vmin=_vmin, vmax=_vmax)
 
     im = ax.matshow(m.numpy(), norm=norm, vmin=None if norm else vmin, vmax=None if norm else vmax)
@@ -133,7 +138,6 @@ def plot_logit_diff_heatmap(
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
 
-    # ✅ FIX: use the correct kw name (and helper accepts both anyway)
     xt = _tick_positions(seq_len, max_ticks=max_xticks)
     yt = list(range(n_layers))
 
