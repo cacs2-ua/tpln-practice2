@@ -173,6 +173,7 @@ class GPT(nn.Module):
         self.last_logits: Optional[torch.Tensor] = None
         self.last_patch: Optional[Tuple[int, int]] = None
         self.last_patch_source: Optional[Tuple[int, int]] = None   # (source_layer, source_pos)
+        self.last_patch_alpha: Optional[float] = None
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -288,6 +289,7 @@ class GPT(nn.Module):
         # NEW (EXTRA 1): wrong-source patch controls
         source_layer: Optional[int] = None,
         source_position: Optional[int] = None,
+        patch_alpha: Optional[float] = None,
     ):
         """
         Forward pass with:
@@ -318,6 +320,7 @@ class GPT(nn.Module):
         self.last_logits = None
         self.last_patch = None
         self.last_patch_source = None
+        self.last_patch_alpha = None
 
         # --- Patch argument validation (isolation + safety) ---
         patch_requested = (layer_to_patch is not None) or (position_to_patch is not None)
@@ -356,6 +359,15 @@ class GPT(nn.Module):
                     "Run a CLEAN pass first with cache_activations=True."
                 )
 
+        patch_alpha_f: float = 1.0
+        if patch_requested:
+            if patch_alpha is None:
+                patch_alpha_f = 1.0
+            else:
+                patch_alpha_f = float(patch_alpha)
+            if not (0.0 <= patch_alpha_f <= 1.0):
+                raise ValueError(f"patch_alpha must be in [0,1], got {patch_alpha_f}")
+        
         device = idx.device
         b, t = idx.size()
         assert t <= self.block_size, f"Cannot forward sequence of length {t}, block size is only {self.block_size}"
@@ -412,12 +424,22 @@ class GPT(nn.Module):
                 clean_vec = self.clean_activations[int(source_layer)][int(source_position)]
                 clean_vec = clean_vec.to(device=x.device, dtype=x.dtype)
 
-                x[0, int(position_to_patch), :].copy_(clean_vec)
+                if patch_alpha_f <= 0.0:
+                    # alpha=0 => no-op (keep corrupted activation)
+                    pass
+                elif patch_alpha_f >= 1.0:
+                    # alpha=1 => standard full patch
+                    x[0, int(position_to_patch), :].copy_(clean_vec)
+                else:
+                    # 0<alpha<1 => convex combination
+                    corr_vec = x[0, int(position_to_patch), :].detach().clone()
+                    mixed_vec = (patch_alpha_f * clean_vec) + ((1.0 - patch_alpha_f) * corr_vec)
+                    x[0, int(position_to_patch), :].copy_(mixed_vec)
 
                 patch_applied = True
                 self.last_patch = (int(layer_to_patch), int(position_to_patch))
                 self.last_patch_source = (int(source_layer), int(source_position))
-
+                self.last_patch_alpha = patch_alpha_f
             # --- record activations AFTER patching ---
             if record_activations:
                 layer_acts = []
