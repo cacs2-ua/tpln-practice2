@@ -9,7 +9,6 @@ from mingpt.utils import set_seed
 
 from patching_sweep import build_patching_sweep
 
-# --- Section 10: visualization helpers ---
 from section10_visualization import (
     HeatmapMeta,
     decode_prompt_token_labels,
@@ -32,7 +31,6 @@ def main() -> None:
     device = get_device()
     print("Device:", device)
 
-    # --- Choose your experiment here ---
     CLEAN_TEXT = "Michelle Jones was a top-notch student. Michelle"
     CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
 
@@ -77,7 +75,6 @@ def main() -> None:
     print("n_layers:", res.n_layers, "seq_len:", res.seq_len)
     print("dtype:", res.matrix.dtype, "device:", res.matrix.device)
 
-    # Save for Section 10 plotting later
     torch.save(
         {
             "matrix": res.matrix,
@@ -96,7 +93,6 @@ def main() -> None:
     )
     print("\nSaved: section9_diff_matrix.pt")
 
-    # >>> INSERTA AQUÍ EL BLOQUE DE SECTION 10 (al final de main) <<<
     out_dir = Path("artifacts/section9_and_10")
     token_labels = decode_prompt_token_labels(bpe, CLEAN_TEXT)
     metric_title = f"Logit difference heatmap: logit({repr(TOKEN_B)}) − logit({repr(TOKEN_A)})"
