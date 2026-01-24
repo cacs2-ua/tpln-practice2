@@ -32,7 +32,7 @@ def get_device() -> str:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--out_dir", type=str, required=True)
-    p.add_argument("--saved", type=str, default=DEFAULT_SAVED, help="Path to section9 saved matrix (.pt)")
+    p.add_argument("--saved", type=str, default=DEFAULT_SAVED, help="Path saved matrix (.pt)")
     p.add_argument("--show_token_strs", action="store_true", help="Label x-axis with decoded token strings")
     p.add_argument("--also_delta", action="store_true", help="Also save delta heatmap: score(L,P) - corrupt_score")
     return p.parse_args()
@@ -106,10 +106,10 @@ def main() -> None:
     print(f"Loaded {saved_path} with matrix shape {tuple(matrix.shape)}")
 
     # Defaults (used if file doesn't contain metadata)
-    CLEAN_TEXT = str(saved_meta.get("clean_text", "Michelle Jones was a top-notch student. Michelle"))
-    CORRUPT_TEXT = str(saved_meta.get("corrupt_text", "Michelle Smith was a top-notch student. Michelle"))
-    TOKEN_A = str(saved_meta.get("token_a", " Jones"))
-    TOKEN_B = str(saved_meta.get("token_b", " Smith"))
+    CLEAN_TEXT = str(saved_meta.get("clean_text", "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"))
+    CORRUPT_TEXT = str(saved_meta.get("corrupt_text", "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"))
+    TOKEN_A = str(saved_meta.get("token_a", " wizard"))
+    TOKEN_B = str(saved_meta.get("token_b", " algorithm"))
 
     saved_clean_score = saved_meta.get("clean_score", float("nan"))
     saved_corrupt_score = saved_meta.get("corrupt_score", float("nan"))
@@ -146,7 +146,6 @@ def main() -> None:
     print(f"delta (corrupt-clean) = {corrupt_score - clean_score:.4f}")
 
     if isinstance(saved_meta, dict) and (not (saved_clean_score != saved_clean_score) or not (saved_corrupt_score != saved_corrupt_score)):
-        # Note: NaN check via (x != x)
         print("\nSaved baselines (from file, if present):")
         try:
             print(f"saved_clean_score   = {float(saved_clean_score):.4f}")

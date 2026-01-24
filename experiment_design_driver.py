@@ -1,18 +1,10 @@
 """
-Section 4 driver (Colab-friendly).
-
-What it does:
+What this does:
 - Builds/validates an ExperimentSpec:
   - clean/corrupt prompts: same length and exactly 1 token difference
   - target tokens A/B: each must be a single BPE token id
 - Prints all evidence needed for the report
 - Writes a report-ready Markdown file section4.md
-
-Run:
-!python experiment_design_driver.py
-
-Or override:
-!python experiment_design_driver.py --clean "..." --corrupt "..." --token_a " ..." --token_b " ..."
 """
 
 from __future__ import annotations
@@ -88,7 +80,7 @@ def main() -> None:
     md = ed.section4_markdown(valid)
     out_path = Path(args.out_md)
     out_path.write_text(md, encoding="utf-8")
-    print(f"\nWrote Section 4 Markdown to: {out_path.resolve()}")
+    print(f"\nWrote Markdown to: {out_path.resolve()}")
 
 
 if __name__ == "__main__":

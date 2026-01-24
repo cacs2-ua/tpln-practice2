@@ -22,7 +22,7 @@ def main() -> None:
     model = GPT.from_pretrained("gpt2").to(device).eval()
     bpe = BPETokenizer()
 
-    clean = "Michelle Jones was a top-notch student. Michelle"
+    clean = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"
     idx = bpe(clean).to(device)  # (1, T)
 
     logits, _ = model(idx)  # forward ONCE
@@ -43,8 +43,8 @@ def main() -> None:
         print(f"{rank+1:02d}. id={tid:5d} tok={repr(tok):>12} prob={float(top_p[rank]):.4f}")
 
     # Metric: logit(TokenB) - logit(TokenA)
-    token_a = " Jones"
-    token_b = " Smith"
+    token_a = " wizard"
+    token_b = " algorithm"
     id_a = single_token_id(bpe, token_a)
     id_b = single_token_id(bpe, token_b)
 

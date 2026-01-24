@@ -7,17 +7,16 @@ from mingpt.model import GPT
 from mingpt.bpe import BPETokenizer
 from mingpt.utils import set_seed
 
-# Reuse your plotting utilities (already in your project)
 from section10_visualization import (
     decode_prompt_token_labels,
     plot_logit_diff_heatmap,
     save_figure_publication_quality,
 )
 
-CLEAN_TEXT   = "Michelle Jones was a top-notch student. Michelle"
-CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
-TOKEN_A = " Jones"
-TOKEN_B = " Smith"
+CLEAN_TEXT   = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"
+CORRUPT_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"
+TOKEN_A = " wizard"
+TOKEN_B = " algorithm"
 
 def single_token_id(bpe: BPETokenizer, s: str) -> int:
     ids = bpe(s)[0].tolist()

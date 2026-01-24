@@ -1,14 +1,9 @@
 """
-Section 2 driver skeleton (will be extended in Sections 3+ and especially 5–7).
-
-Right now it only:
+Right now this only:
 - loads GPT-2 small via GPT.from_pretrained('gpt2')
 - tokenizes a prompt with BPETokenizer
 - runs a single forward pass to confirm logits shape
 - runs model.generate to confirm decoding loop works
-
-Later, you'll add:
-- control flags passed into GPT.forward (save_activations, patch params, etc.)
 """
 
 from __future__ import annotations

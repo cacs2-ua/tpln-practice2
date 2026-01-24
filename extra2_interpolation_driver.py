@@ -24,10 +24,10 @@ def parse_coords(s: str) -> List[Tuple[int, int]]:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--clean", type=str, default="Michelle Jones was a top-notch student. Michelle")
-    p.add_argument("--corrupt", type=str, default="Michelle Smith was a top-notch student. Michelle")
-    p.add_argument("--token_a", type=str, default=" Jones")   # clean-consistent
-    p.add_argument("--token_b", type=str, default=" Smith")   # corrupt-consistent
+    p.add_argument("--clean", type=str, default="Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso")
+    p.add_argument("--corrupt", type=str, default="Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso")
+    p.add_argument("--token_a", type=str, default=" wizard")   # clean-consistent
+    p.add_argument("--token_b", type=str, default=" algorithm")   # corrupt-consistent
     p.add_argument("--alphas", type=str, default="0,0.25,0.5,0.75,1")
     p.add_argument("--top_k", type=int, default=3)
     p.add_argument("--coords", type=str, default="", help="Optional manual coords 'L:P,L:P,...' (skips hotspot search)")

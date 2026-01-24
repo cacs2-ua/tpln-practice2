@@ -1,5 +1,5 @@
 """
-Section 9: Full Activation Patching Sweep (Layer × Position Difference Matrix)
+Full Activation Patching Sweep (Layer × Position Difference Matrix)
 
 Goal:
 - For each layer L and token position P:
@@ -7,11 +7,6 @@ Goal:
   compute the scalar metric: logit(token_B) - logit(token_A)
   from last-position logits,
   store it in matrix[L, P].
-
-This module assumes your GPT.forward supports:
-- cache_activations / overwrite_cache (for clean run)
-- layer_to_patch / position_to_patch (for patched runs)
-- model.last_logits populated each forward call
 """
 
 from __future__ import annotations
@@ -22,10 +17,7 @@ from typing import Optional, Sequence, Tuple
 import torch
 
 
-# -------------------------
 # Small helpers
-# -------------------------
-
 def _infer_device(model: torch.nn.Module) -> torch.device:
     try:
         return next(model.parameters()).device
@@ -38,7 +30,7 @@ def single_token_id(bpe, token_str: str) -> int:
     Convert token_str into EXACTLY one BPE token id.
     Raises ValueError if it tokenizes into multiple tokens.
 
-    Important: For GPT-2 BPE, mid-sequence tokens often need a leading space, e.g. " Jones".
+    Important: For GPT-2 BPE, mid-sequence tokens often need a leading space, e.g. " wizard".
     """
     ids = bpe(token_str)[0].tolist()
     if len(ids) != 1:
@@ -59,10 +51,7 @@ def logit_diff_from_last_logits(last_logits_1d: torch.Tensor, *, token_a_id: int
     return b - a
 
 
-# -------------------------
 # Outputs
-# -------------------------
-
 @dataclass(frozen=True)
 class SweepResult:
     """
@@ -81,10 +70,7 @@ class SweepResult:
     corrupt_text: str
 
 
-# -------------------------
 # Core sweep (tensor-level) - best for tests
-# -------------------------
-
 @torch.no_grad()
 def sweep_from_ids(
     model,
@@ -119,7 +105,6 @@ def sweep_from_ids(
     layers = list(range(n_layers)) if layers is None else list(layers)
     positions = list(range(T)) if positions is None else list(positions)
 
-    # Optional progress (safe if tqdm missing)
     it = [(L, P) for L in layers for P in positions]
     if progress:
         try:
@@ -130,7 +115,6 @@ def sweep_from_ids(
 
     mat = torch.empty((len(layers), len(positions)), dtype=torch.float32, device="cpu")
 
-    # We index mat by local indices (li, pj) to support optional subsets
     layer_index = {L: i for i, L in enumerate(layers)}
     pos_index = {P: j for j, P in enumerate(positions)}
 
@@ -143,11 +127,6 @@ def sweep_from_ids(
         mat[layer_index[L], pos_index[P]] = float(score)
 
     return mat
-
-
-# -------------------------
-# Full sweep from texts (assignment-facing)
-# -------------------------
 
 @torch.no_grad()
 def build_patching_sweep(
@@ -162,7 +141,7 @@ def build_patching_sweep(
     progress: bool = True,
 ) -> SweepResult:
     """
-    Full Section 9 pipeline:
+    Full pipeline:
     1) tokenize clean/corrupt and enforce equal seq_len
     2) cache clean activations (clean run)
     3) compute baseline clean score and corrupted score
@@ -190,21 +169,21 @@ def build_patching_sweep(
     token_a_id = single_token_id(bpe, token_a_str)
     token_b_id = single_token_id(bpe, token_b_str)
 
-    # 1) CLEAN run: cache activations + baseline score
+    # CLEAN run: cache activations + baseline score
     _logits, _loss = model(idx_clean, cache_activations=True, overwrite_cache=overwrite_cache)
     if model.last_logits is None:
         raise RuntimeError("model.last_logits missing after clean run.")
     clean_last = model.last_logits[0].detach()
     clean_score = logit_diff_from_last_logits(clean_last, token_a_id=token_a_id, token_b_id=token_b_id)
 
-    # 2) CORRUPTED baseline (no patch)
+    # CORRUPTED baseline (no patch)
     _logits, _loss = model(idx_corrupt)
     if model.last_logits is None:
         raise RuntimeError("model.last_logits missing after corrupt baseline run.")
     corrupt_last = model.last_logits[0].detach()
     corrupt_score = logit_diff_from_last_logits(corrupt_last, token_a_id=token_a_id, token_b_id=token_b_id)
 
-    # 3) FULL sweep on corrupted ids (requires clean cache)
+    # FULL sweep on corrupted ids (requires clean cache)
     matrix = sweep_from_ids(
         model,
         idx_corrupt,

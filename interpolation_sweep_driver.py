@@ -8,8 +8,8 @@ import torch
 from mingpt.model import GPT
 from mingpt.bpe import BPETokenizer
 
-import tokenization_protocol as tp  # you already have this
-from baseline_utils import single_token_id  # you already have this
+import tokenization_protocol as tp  
+from baseline_utils import single_token_id  
 
 
 def parse_alphas(xs: List[str]) -> List[float]:
@@ -61,8 +61,6 @@ def pick_best_layer_at_changed_pos(
     best_L = 0
     best_restoration = -1e9
 
-    # We choose the layer whose full patch (alpha=1) moves score the most away from corrupted baseline
-    # toward *anything* different (restoration magnitude).
     for L in range(n_layer):
         last, _ = run_once(
             model,
@@ -83,10 +81,10 @@ def pick_best_layer_at_changed_pos(
 @torch.no_grad()
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--clean", type=str, default="Michelle Jones was a top-notch student. Michelle")
-    ap.add_argument("--corrupt", type=str, default="Michelle Smith was a top-notch student. Michelle")
-    ap.add_argument("--token_a", type=str, default=" Jones")
-    ap.add_argument("--token_b", type=str, default=" Smith")
+    ap.add_argument("--clean", type=str, default="Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso")
+    ap.add_argument("--corrupt", type=str, default="Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso")
+    ap.add_argument("--token_a", type=str, default=" wizard")
+    ap.add_argument("--token_b", type=str, default=" algorithm")
 
     ap.add_argument("--layer", type=int, default=-1, help="Target layer L. If -1, auto-pick best L at changed token position.")
     ap.add_argument("--pos", type=int, default=-1, help="Target position P. If -1, use changed token position.")
@@ -101,7 +99,7 @@ def main() -> None:
 
     bpe = BPETokenizer()
 
-    # 1) Tokenization validation
+    # Tokenization validation
     clean_rep = tp.build_report(bpe, args.clean)
     corrupt_rep = tp.build_report(bpe, args.corrupt)
     comp = tp.compare_clean_corrupt(clean_rep, corrupt_rep)
@@ -114,22 +112,22 @@ def main() -> None:
     changed_pos = int(comp.diff_positions[0])
     print(f"Seq len T={clean_rep.seq_len}, changed token position={changed_pos}")
 
-    # 2) Load model
+    # Load model
     model = GPT.from_pretrained("gpt2").to(device).eval()
 
     # Token ids for metric
     token_a_id = single_token_id(bpe, args.token_a)
     token_b_id = single_token_id(bpe, args.token_b)
 
-    # 3) Build tensors
+    # Build tensors
     idx_clean = bpe(args.clean).to(device)
     idx_corrupt = bpe(args.corrupt).to(device)
 
-    # 4) Clean baseline (cache activations)
+    # Clean baseline (cache activations)
     last_clean, _ = run_once(model, idx_clean, cache_clean=True, overwrite_cache=True)
     score_clean = score_from_last_logits(last_clean, token_a_id, token_b_id)
 
-    # 5) Corrupt baseline
+    # Corrupt baseline
     last_corr, acts_corr = run_once(model, idx_corrupt, record_acts=args.check_mixture)
     score_corr = score_from_last_logits(last_corr, token_a_id, token_b_id)
 
@@ -138,7 +136,7 @@ def main() -> None:
     print(f"score_corr   = {score_corr:.6f}")
     print(f"delta(corr-clean) = {score_corr - score_clean:.6f}")
 
-    # 6) Choose (L,P)
+    # Choose (L,P)
     P = changed_pos if args.pos < 0 else int(args.pos)
     if args.layer < 0:
         L = pick_best_layer_at_changed_pos(model, idx_corrupt, token_a_id, token_b_id, changed_pos=P, score_corr=score_corr)
@@ -149,11 +147,11 @@ def main() -> None:
 
     alphas = parse_alphas(args.alphas)
 
-    # 7) Full patch score (alpha=1) used for endpoint check
+    # Full patch score (alpha=1) used for endpoint check
     last_full, _ = run_once(model, idx_corrupt, layer_to_patch=L, position_to_patch=P, patch_alpha=1.0)
     score_full = score_from_last_logits(last_full, token_a_id, token_b_id)
 
-    # 8) Sweep
+    # Sweep
     print("\n=== Interpolation sweep ===")
     print("alpha | score(alpha) | R_hat_vs_full | meta(last_patch,last_alpha)")
     print("-"*78)
@@ -161,7 +159,6 @@ def main() -> None:
     eps_score = 1e-5
     base_denom = (score_full - score_corr)
 
-    # Optional: mixture check uses recorded activations
     clean_vec = model.clean_activations[L][P].to(device)
 
     for a in alphas:
@@ -196,7 +193,7 @@ def main() -> None:
             if max_err > 1e-4:
                 raise RuntimeError(f"Mixture check FAILED at alpha={a}: max|x_patched - mix| = {max_err:.6e}")
 
-    # 9) Endpoint checks
+    # Endpoint checks
     # alpha=0
     last_0, _ = run_once(model, idx_corrupt, layer_to_patch=L, position_to_patch=P, patch_alpha=0.0)
     score_0 = score_from_last_logits(last_0, token_a_id, token_b_id)
@@ -214,9 +211,9 @@ def main() -> None:
     if abs(score_1 - score_full) > eps_score:
         raise RuntimeError("FAILED endpoint check α=1: score(1) != score_full (must match standard patch).")
 
-    print("\n✅ EXTRA 2 looks correct: endpoints match and sweep ran successfully.")
+    print("\nThis looks correct: endpoints match and sweep ran successfully.")
     if args.check_mixture:
-        print("✅ Mixture check passed: activations match αx_clean+(1-α)x_corr at the patched coordinate.")
+        print("Mixture check passed: activations match αx_clean+(1-α)x_corr at the patched coordinate.")
 
 
 if __name__ == "__main__":
