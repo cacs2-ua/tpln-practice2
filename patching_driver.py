@@ -21,16 +21,16 @@ def main():
     corrupt = clean.clone()
     corrupt[0, 3] = (corrupt[0, 3] + 1) % cfg.vocab_size  # minimal corruption
 
-    # 1) cache clean activations
+    # cache clean activations
     _ = model(clean, cache_activations=True, overwrite_cache=True)
     print("Cached clean activations:",
           len(model.clean_activations), "layers x", len(model.clean_activations[0]), "positions")
 
-    # 2) corrupted baseline (no patch)
+    # corrupted baseline (no patch)
     _ = model(corrupt)
     base_last = model.last_logits.clone()
 
-    # 3) one patched run (layer=0, pos=3)
+    # one patched run (layer=0, pos=3)
     _ = model(corrupt, layer_to_patch=0, position_to_patch=3)
     patched_last = model.last_logits.clone()
 

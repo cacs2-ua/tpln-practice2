@@ -11,13 +11,10 @@ from mingpt.utils import set_seed
 import wrong_source_control as wsc
 
 
-# -------------------------
-# EDIT THESE (your experiment)
-# -------------------------
-CLEAN_TEXT = "Michelle Jones was a top-notch student. Michelle"
-CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
-TOKEN_A_STR = " Jones"   # clean-consistent
-TOKEN_B_STR = " Smith"   # corrupt-consistent
+CLEAN_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espress"
+CORRUPT_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"
+TOKEN_A_STR = " wizard"   # clean-consistent
+TOKEN_B_STR = " algorithm"   # corrupt-consistent
 TOP_K_HOTSPOTS = 3
 
 
@@ -68,7 +65,6 @@ def select_hotspots_and_cold(
 
     denom = (score_clean - score_corr)
     if abs(denom) < 1e-12:
-        # degenerate; just pick arbitrary cells
         hot = [(0, 0)]
         cold = (0, 0)
         return hot, cold
@@ -89,10 +85,8 @@ def select_hotspots_and_cold(
         if len(hotspots) >= top_k:
             break
 
-    # cold: minimal |score_patch - score_corr| among remaining cells
     delta = (match_heatmap - score_corr).abs()
     delta_flat = delta.flatten()
-    # mask out hotspots
     mask = torch.ones_like(delta_flat, dtype=torch.bool)
     for (L, P) in hotspots:
         mask[L * seq_len + P] = False
@@ -110,32 +104,32 @@ def main() -> None:
     device = get_device()
     print("Device:", device)
 
-    # 1) Load model + tokenizer
+    # Load model + tokenizer
     model = GPT.from_pretrained("gpt2").to(device).eval()
     bpe = BPETokenizer()
 
-    # 2) Validate same token length
+    # Validate same token length
     if not tokens_same_length(bpe, CLEAN_TEXT, CORRUPT_TEXT):
         raise RuntimeError(
             "CLEAN_TEXT and CORRUPT_TEXT do NOT have the same number of BPE tokens.\n"
             "Fix the texts until they tokenize to the same length."
         )
 
-    # 3) Tokenize prompts
+    # Tokenize prompts
     idx_clean = bpe(CLEAN_TEXT).to(device)     # (1, T)
     idx_corr = bpe(CORRUPT_TEXT).to(device)    # (1, T)
     seq_len = idx_corr.shape[1]
     n_layers = len(model.transformer.h)
 
-    # 4) Token ids for metric
+    # Token ids for metric
     token_a_id = wsc.single_token_id(bpe, TOKEN_A_STR)
     token_b_id = wsc.single_token_id(bpe, TOKEN_B_STR)
 
-    # 5) Clean baseline (cache activations)
+    # Clean baseline (cache activations)
     _ = model(idx_clean, cache_activations=True, overwrite_cache=True)
     score_clean = wsc.score_from_last_logits(model.last_logits[0], token_a_id, token_b_id)
 
-    # 6) Corrupted baseline
+    # Corrupted baseline
     _ = model(idx_corr)
     score_corr = wsc.score_from_last_logits(model.last_logits[0], token_a_id, token_b_id)
 
@@ -144,13 +138,13 @@ def main() -> None:
     print(f"score_clean = {score_clean:.6f}")
     print(f"score_corr  = {score_corr:.6f}")
 
-    # 7) Compute MATCH heatmap (standard patch)
+    # Compute MATCH heatmap (standard patch)
     print("\nComputing match heatmap (this is the same sweep as your main analysis)...")
     match_heatmap = compute_match_heatmap(model, idx_corr, token_a_id, token_b_id)
     torch.save(match_heatmap.cpu(), "match_heatmap.pt")
     print("Saved: match_heatmap.pt")
 
-    # 8) Pick top hotspots + one cold cell
+    # Pick top hotspots + one cold cell
     hotspots, cold = select_hotspots_and_cold(match_heatmap, score_clean, score_corr, top_k=TOP_K_HOTSPOTS)
     targets = hotspots + [cold]
 
@@ -161,7 +155,7 @@ def main() -> None:
         tag = "COLD" if (L, P) == cold else "HOT"
         print(f"{i+1:02d}. ({L},{P})  match_score={s:.6f}  R_match={R:.4f}  [{tag}]")
 
-    # 9) Run wrong-source conditions per target
+    # Run wrong-source conditions per target
     print("\n=== WRONG-SOURCE CONTROL RESULTS ===")
     print("(Metric: score = logit(B) - logit(A); higher/lower direction depends on your pair)\n")
 
@@ -184,7 +178,7 @@ def main() -> None:
 
             print(f"{c.name:12s} | {src:10s} | {score:12.6f} | {R:8.4f}")
 
-    # 10) OPTIONAL: build one full wrong-source heatmap using deterministic rule (pos+1 else pos-1)
+    # OPTIONAL: build one full wrong-source heatmap using deterministic rule (pos+1 else pos-1)
     print("\nOptional: computing a full wrong-source heatmap with rule: source=(L,P+1) else (L,P-1)")
     ws_heatmap = torch.empty_like(match_heatmap)
     for L in range(n_layers):
@@ -195,7 +189,6 @@ def main() -> None:
 
     torch.save(ws_heatmap.cpu(), "wrong_source_posshift_heatmap.pt")
     print("Saved: wrong_source_posshift_heatmap.pt")
-    print("\nDone ✅")
 
 
 if __name__ == "__main__":

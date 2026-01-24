@@ -1,15 +1,10 @@
 """
-Section 2 helper: repository/codebase orientation for minGPT in Colab.
-
 What this script does:
 - Prints where mingpt is installed.
 - Locates mingpt/model.py.
 - Extracts/prints the key lines of GPT.forward that matter for the assignment:
   embeddings -> transformer blocks -> ln_f -> lm_head -> logits
 - Provides programmatic checks used by unit tests.
-
-This does NOT implement activation caching/patching yet. It only verifies
-we understand where it would go later.
 """
 
 from __future__ import annotations
@@ -58,15 +53,9 @@ def forward_source() -> str:
 
 
 def find_forward_landmarks(src: str) -> ForwardLandmarks:
-    # We intentionally check for robust substrings (not exact formatting).
     has_tok_emb = ("tok_emb" in src) and ("wte" in src)
     has_pos_emb = ("pos_emb" in src) and ("wpe" in src)
 
-    # Your GPT.forward now loops like:
-    #   for layer_idx, block in enumerate(self.transformer.h):
-    # but the old check only matched:
-    #   for block in self.transformer.h:
-    # So we detect ANY "for ... in ... self.transformer.h" form.
     has_blocks_loop = (
         re.search(r"\bfor\b\s+.+\s+\bin\b\s+.*self\.transformer\.h", src) is not None
         or re.search(r"\bfor\b\s+.+\s+\bin\b\s+.*self\.transformer\['h'\]", src) is not None

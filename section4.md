@@ -13,7 +13,7 @@
 | pos | clean_id | clean_tok | corrupt_id | corrupt_tok | diff? |
 |---:|---:|---|---:|---|:---:|
 | 0 | 818 | 'In' | 818 | 'In' |  |
-| 1 | 11361 | ' Python' | 11933 | ' JavaScript' | ✅ |
+| 1 | 11361 | ' Python' | 11933 | ' JavaScript' | OK |
 | 2 | 11 | ',' | 11 | ',' |  |
 | 3 | 262 | ' the' | 262 | ' the' |  |
 | 4 | 21179 | ' keyword' | 21179 | ' keyword' |  |

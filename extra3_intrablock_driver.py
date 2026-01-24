@@ -30,13 +30,10 @@ def main() -> None:
     device = get_device()
     print("Device:", device)
 
-    # -------------------------
-    # EDIT THESE (your experiment)
-    # -------------------------
-    CLEAN_TEXT = "Michelle Jones was a top-notch student. Michelle"
-    CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
-    TOKEN_A = " Jones"  # clean-consistent
-    TOKEN_B = " Smith"  # corrupt-consistent
+    CLEAN_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"
+    CORRUPT_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"
+    TOKEN_A = " wizard"  # clean-consistent
+    TOKEN_B = " algorithm"  # corrupt-consistent
 
     # Load model + tokenizer
     model = GPT.from_pretrained("gpt2").to(device).eval()
@@ -93,7 +90,6 @@ def main() -> None:
     )
     print("Saved:", (out_dir / "extra3_matrices.pt").resolve())
 
-    # ---- Plot: post-attn ----
     title_attn = f"EXTRA 3 — post-attn patching: logit({repr(TOKEN_B)}) − logit({repr(TOKEN_A)})"
     meta_attn = HeatmapMeta(
         metric_title=title_attn,
@@ -116,7 +112,6 @@ def main() -> None:
     )
     save_figure_publication_quality(fig, out_basepath=out_dir / "post_attn" / "heatmap_post_attn", formats=("png", "pdf"))
 
-    # ---- Plot: post-MLP ----
     title_mlp = f"EXTRA 3 — post-MLP patching: logit({repr(TOKEN_B)}) − logit({repr(TOKEN_A)})"
     meta_mlp = HeatmapMeta(
         metric_title=title_mlp,
@@ -139,7 +134,7 @@ def main() -> None:
     )
     save_figure_publication_quality(fig, out_basepath=out_dir / "post_mlp" / "heatmap_post_mlp", formats=("png", "pdf"))
 
-    print("\n✅ Done. Heatmaps saved under:", out_dir.resolve())
+    print("\nHeatmaps saved under:", out_dir.resolve())
 
 
 if __name__ == "__main__":

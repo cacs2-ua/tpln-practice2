@@ -4,11 +4,10 @@ import torch
 from mingpt.model import GPT
 from mingpt.bpe import BPETokenizer
 
-# Same example as the handout (usually stable)
-CLEAN_TEXT   = "Michelle Jones was a top-notch student. Michelle"
-CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
-TOKEN_A = " Jones"  # clean-consistent
-TOKEN_B = " Smith"  # corrupt-consistent
+CLEAN_TEXT   = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"
+CORRUPT_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"
+TOKEN_A = " wizard"  
+TOKEN_B = " algorithm"  
 
 def single_token_id(bpe: BPETokenizer, s: str) -> int:
     ids = bpe(s)[0].tolist()
@@ -17,7 +16,6 @@ def single_token_id(bpe: BPETokenizer, s: str) -> int:
     return int(ids[0])
 
 def score_from_last_logits(last_logits_1d: torch.Tensor, *, a_id: int, b_id: int) -> float:
-    # score = logit(B) - logit(A)
     return float(last_logits_1d[b_id] - last_logits_1d[a_id])
 
 @torch.no_grad()
@@ -41,7 +39,7 @@ def main() -> None:
     a_id = single_token_id(bpe, TOKEN_A)
     b_id = single_token_id(bpe, TOKEN_B)
 
-    # 1) CLEAN run (this must create BOTH intra-block caches)
+    # CLEAN run (this must create BOTH intra-block caches)
     _ = model(idx_clean, cache_activations=True, overwrite_cache=True)
     print("Clean caches present?",
           "post_attn:", model.clean_post_attn_activations is not None,
@@ -53,7 +51,7 @@ def main() -> None:
 
     score_clean = score_from_last_logits(model.last_logits[0], a_id=a_id, b_id=b_id)
 
-    # 2) CORR baseline (no patch)
+    # CORR baseline (no patch)
     _ = model(idx_corr)
     score_corr = score_from_last_logits(model.last_logits[0], a_id=a_id, b_id=b_id)
 
@@ -67,7 +65,7 @@ def main() -> None:
     test_L = 6
     test_P = 1 if T > 1 else 0
 
-    # 3) Patch at post-attn
+    # Patch at post-attn
     _ = model(idx_corr,
               layer_to_patch=test_L,
               position_to_patch=test_P,
@@ -77,7 +75,7 @@ def main() -> None:
     print("last_patch:", model.last_patch, "last_patch_location:", model.last_patch_location)
     print(f"score_post_attn = {s_attn:.4f}  | delta_vs_corr = {s_attn - score_corr:+.4f}")
 
-    # 4) Patch at post-MLP
+    # Patch at post-MLP
     _ = model(idx_corr,
               layer_to_patch=test_L,
               position_to_patch=test_P,
@@ -87,7 +85,7 @@ def main() -> None:
     print("last_patch:", model.last_patch, "last_patch_location:", model.last_patch_location)
     print(f"score_post_mlp  = {s_mlp:.4f}  | delta_vs_corr = {s_mlp - score_corr:+.4f}")
 
-    # 5) The key EXTRA 3 assertion: the two locations should not be identical everywhere.
+    # The key assertion: the two locations should not be identical everywhere.
     print("\n=== Intra-block location difference (single cell) ===")
     print(f"abs(score_post_attn - score_post_mlp) = {abs(s_attn - s_mlp):.6f}")
     print("If this is exactly 0.0 for many tested cells, your patch_location may not be applied correctly.")

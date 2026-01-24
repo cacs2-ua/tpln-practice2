@@ -151,10 +151,10 @@ def select_coldcell(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--clean", type=str, default="Michelle Jones was a top-notch student. Michelle")
-    p.add_argument("--corrupt", type=str, default="Michelle Smith was a top-notch student. Michelle")
-    p.add_argument("--token_a", type=str, default=" Jones", help="Token A (clean-consistent), usually with leading space")
-    p.add_argument("--token_b", type=str, default=" Smith", help="Token B (corrupt-consistent), usually with leading space")
+    p.add_argument("--clean", type=str, default="Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso")
+    p.add_argument("--corrupt", type=str, default="Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso")
+    p.add_argument("--token_a", type=str, default=" wizard", help="Token A (clean-consistent), usually with leading space")
+    p.add_argument("--token_b", type=str, default=" algorithm", help="Token B (corrupt-consistent), usually with leading space")
     p.add_argument("--seed", type=int, default=3407)
     p.add_argument("--n_hot", type=int, default=3)
     return p.parse_args()
@@ -194,7 +194,6 @@ def main() -> None:
 
     print(f"Seq len T={T}, changed token position={changed_pos}")
 
-    # --- Baselines ---
     _ = model(idx_clean, cache_activations=True, overwrite_cache=True)
     if model.last_logits is None:
         raise RuntimeError("model.last_logits not set on clean run.")
@@ -207,7 +206,6 @@ def main() -> None:
     print(f"score_corr   = {score_corr:.4f}")
     print(f"gap (clean-corr) = {(score_clean - score_corr):.4f}")
 
-    # --- Build MATCH heatmap (scores) ---
     match_scores = torch.empty((n_layer, T), dtype=torch.float32)
     for L in range(n_layer):
         for P in range(T):
@@ -223,7 +221,6 @@ def main() -> None:
             )
             match_scores[L, P] = float(s)
 
-    # --- Select coords: hot + cold ---
     hot = select_hotspots(match_scores, score_clean=score_clean, k=args.n_hot)
     cold = select_coldcell(match_scores, score_corr=score_corr, changed_pos=changed_pos)
 
@@ -235,7 +232,6 @@ def main() -> None:
     s_cold = float(match_scores[cold[0], cold[1]])
     print(f"  COLD: (L={cold[0]}, P={cold[1]})  match_score={s_cold:.4f}  improvement={(score_corr - s_cold):.4f}")
 
-    # --- Wrong-source control table ---
     print("\n=== Wrong-source control table ===")
     print("coord | variant | source(L,P) | score | R (restoration) | C (closeness) | last_patch | last_patch_source")
     print("-" * 110)

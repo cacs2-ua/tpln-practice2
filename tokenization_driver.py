@@ -1,11 +1,6 @@
 """
-Section 3 driver: tokenize clean/corrupt prompts, enforce same-length and one-token-diff,
+Tokenize clean/corrupt prompts, enforce same-length and one-token-diff,
 print per-token decomposition, and export a Markdown token table for the report.
-
-Usage in Colab:
-!python tokenization_driver.py
-
-Or override defaults by editing the CLEAN_TEXT / CORRUPT_TEXT constants below.
 """
 
 from __future__ import annotations
@@ -17,10 +12,8 @@ from mingpt.bpe import BPETokenizer
 
 import tokenization_protocol as tp
 
-
-# Edit these defaults for your own experiment.
-CLEAN_TEXT = "Michelle Jones was a top-notch student. Michelle"
-CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
+CLEAN_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"
+CORRUPT_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,7 +45,6 @@ def main() -> None:
     print("\n=== Corrupt tokens (pos | id | repr(token)) ===")
     print(tp.format_token_list_for_console(corrupt_rep))
 
-    # Enforce constraints as requested by the assignment
     require_one = not args.no_require_one_diff
     try:
         _ = tp.validate_pair(
@@ -62,15 +54,14 @@ def main() -> None:
             require_same_length=True,
             require_one_token_diff=require_one,
         )
-        print("\n✅ Validation passed.")
+        print("\nValidation passed.")
     except Exception as e:
-        print("\n❌ Validation failed:")
+        print("\nValidation failed:")
         print(e)
         print("\nSuggestions:")
         for s in tp.suggest_fixes(clean_rep, corrupt_rep):
             print("-", s)
 
-    # Export markdown table for report
     md = tp.format_pair_diff_markdown(comp)
     out_path = Path(args.out_md)
     out_path.write_text(md, encoding="utf-8")

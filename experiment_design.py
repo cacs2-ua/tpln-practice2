@@ -1,5 +1,5 @@
 """
-Section 4: Experimental Design (clean/corrupted prompts + target tokens + hypothesis)
+Experimental Design (clean/corrupted prompts + target tokens + hypothesis)
 
 This module provides:
 - A structured ExperimentSpec (clean/corrupt prompts, target tokens A/B, hypothesis)
@@ -8,8 +8,6 @@ This module provides:
   - same number of tokens
   - target tokens A/B are SINGLE BPE tokens (usually with leading space)
 - Convenience: candidate specs + "pick the first valid one" to avoid tokenization surprises.
-
-It depends on tokenization_protocol.py (Section 3), which you already implemented.
 """
 
 from __future__ import annotations
@@ -22,14 +20,12 @@ from mingpt.bpe import BPETokenizer
 import tokenization_protocol as tp
 
 
-# -----------------------------
 # Data structures
-# -----------------------------
 
 @dataclass(frozen=True)
 class ExperimentSpec:
     """
-    Section 4 "contract" for the experiment.
+    Contract" for the experiment.
 
     clean_text and corrupt_text:
       - must have same BPE token length
@@ -55,10 +51,7 @@ class ValidatedExperiment:
     token_b_id: int
 
 
-# -----------------------------
 # Token helpers (Token A / Token B)
-# -----------------------------
-
 def ensure_leading_space(token_str: str) -> str:
     """
     GPT-2 BPE typically encodes mid-sequence words with a leading space.
@@ -83,10 +76,7 @@ def single_token_id(bpe: BPETokenizer, token_str: str) -> int:
     return int(ids[0])
 
 
-# -----------------------------
 # Core validation utilities
-# -----------------------------
-
 def changed_token_position(comp: tp.PairComparison) -> int:
     """
     Returns the unique position where clean vs corrupt differ.
@@ -110,7 +100,7 @@ def default_hypothesis(changed_pos: int) -> str:
 
 def validate_experiment(bpe: BPETokenizer, spec: ExperimentSpec) -> ValidatedExperiment:
     """
-    Full Section 4 validation:
+    Full validation for this section:
     - clean/corrupt must be same length AND differ by exactly one BPE token
     - token A and token B must each be single BPE tokens (usually with leading space)
     """
@@ -134,18 +124,12 @@ def validate_experiment(bpe: BPETokenizer, spec: ExperimentSpec) -> ValidatedExp
         token_b_id=token_b_id,
     )
 
-
-# -----------------------------
-# Candidate specs + auto-pick
-# -----------------------------
-
 def candidate_experiments() -> List[ExperimentSpec]:
     """
     A small pool of "creative but simple" candidates.
     We DO NOT assume these always pass one-token-diff constraints;
     that's why pick_first_valid_experiment() exists.
     """
-    # Note: token strings here include leading spaces on purpose.
     return [
         ExperimentSpec(
             clean_text="In Python, the keyword to define a function is",
@@ -191,7 +175,6 @@ def pick_first_valid_experiment(bpe: BPETokenizer, specs: Optional[List[Experime
     errors: List[str] = []
 
     for i, s in enumerate(specs):
-        # If hypothesis was left as "(auto)", fill it after we know the changed position
         try:
             tmp = validate_experiment(bpe, s if s.hypothesis != "(auto)" else s)
             if tmp.spec.hypothesis == "(auto)":
@@ -209,7 +192,7 @@ def pick_first_valid_experiment(bpe: BPETokenizer, specs: Optional[List[Experime
             errors.append(f"[Candidate {i}] {e}")
 
     raise ValueError(
-        "None of the candidate experiments passed the strict Section 4 constraints.\n"
+        "None of the candidate experiments passed the strict constraints.\n"
         "This is normal: GPT-2 BPE tokenization can be surprising.\n\n"
         "What to do:\n"
         "1) Provide your own clean/corrupt prompts and re-run the driver with --clean/--corrupt.\n"
@@ -218,14 +201,9 @@ def pick_first_valid_experiment(bpe: BPETokenizer, specs: Optional[List[Experime
         "Errors from candidates:\n" + "\n".join(errors)
     )
 
-
-# -----------------------------
-# Report-oriented formatting
-# -----------------------------
-
 def section4_markdown(valid: ValidatedExperiment) -> str:
     """
-    Produces a compact Markdown block you can paste into the PDF report (Section 4).
+    Produces a compact Markdown block you can paste into the PDF report.
     Includes prompts, token stats, target tokens, and the hypothesis.
     """
     comp = valid.comparison

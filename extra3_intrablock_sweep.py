@@ -72,7 +72,7 @@ def sweep_location_from_ids(
     it = [(L, P) for L in layers for P in positions]
     if progress:
         try:
-            from tqdm import tqdm  # type: ignore
+            from tqdm import tqdm  
             it = tqdm(it, desc=f"sweep({patch_location})", total=len(it))
         except Exception:
             pass

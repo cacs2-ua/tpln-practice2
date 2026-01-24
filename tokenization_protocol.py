@@ -1,5 +1,5 @@
 """
-Section 3: Tokenization Protocol and "Same Number of Tokens" Guarantee.
+Tokenization Protocol and "Same Number of Tokens" Guarantee.
 
 This module provides:
 - Tokenization reports (token ids, per-token decoded strings, token count)
@@ -19,10 +19,7 @@ import torch
 from mingpt.bpe import BPETokenizer
 
 
-# -----------------------------
 # Data structures
-# -----------------------------
-
 @dataclass(frozen=True)
 class TokenizationReport:
     text: str
@@ -49,10 +46,7 @@ class PairComparison:
         return self.same_length and self.diff_count == 1
 
 
-# -----------------------------
 # Core tokenization helpers
-# -----------------------------
-
 def tokenize_2d(bpe: BPETokenizer, text: str, device: Optional[str] = None) -> torch.LongTensor:
     """
     Returns token ids as a 2D tensor of shape (1, T) as BPETokenizer does.
@@ -110,10 +104,7 @@ def build_report(bpe: BPETokenizer, text: str) -> TokenizationReport:
     )
 
 
-# -----------------------------
 # Comparison and validations
-# -----------------------------
-
 def diff_positions(a: Sequence[int], b: Sequence[int]) -> List[int]:
     """
     Returns a list of positions where sequences differ.
@@ -181,10 +172,6 @@ def validate_pair(
     return comp
 
 
-# -----------------------------
-# Printing / report exports
-# -----------------------------
-
 def format_token_list_for_console(rep: TokenizationReport) -> str:
     """
     Console-friendly token list.
@@ -212,7 +199,7 @@ def format_pair_diff_markdown(comp: PairComparison) -> str:
         k_id = corrupt.token_ids[i] if i < corrupt.seq_len else None
         c_tok = clean.token_strs[i] if i < clean.seq_len else ""
         k_tok = corrupt.token_strs[i] if i < corrupt.seq_len else ""
-        diff = "✅" if i in comp.diff_positions else ""
+        diff = "OK" if i in comp.diff_positions else ""
         rows.append(
             f"| {i} | {'' if c_id is None else c_id} | {repr(c_tok)} | {'' if k_id is None else k_id} | {repr(k_tok)} | {diff} |"
         )
@@ -234,10 +221,6 @@ def describe_pair(comp: PairComparison) -> str:
     )
 
 
-# -----------------------------
-# Heuristic suggestions (for mismatch debugging)
-# -----------------------------
-
 def suggest_fixes(clean: TokenizationReport, corrupt: TokenizationReport) -> List[str]:
     """
     Heuristics to help the user fix length mismatches / multi-token mismatches.
@@ -245,7 +228,6 @@ def suggest_fixes(clean: TokenizationReport, corrupt: TokenizationReport) -> Lis
     """
     suggestions: List[str] = []
 
-    # Length mismatch guidance
     if clean.seq_len != corrupt.seq_len:
         suggestions.append(
             "Token length mismatch detected. Common causes: whitespace differences, punctuation attachment, "
@@ -258,7 +240,6 @@ def suggest_fixes(clean: TokenizationReport, corrupt: TokenizationReport) -> Lis
             "Proper nouns are often unstable: try swapping to a more common single-token alternative and re-check."
         )
 
-    # Multi-token difference guidance
     diffs = diff_positions(clean.token_ids, corrupt.token_ids)
     if clean.seq_len == corrupt.seq_len and len(diffs) != 1:
         suggestions.append(
@@ -268,10 +249,9 @@ def suggest_fixes(clean: TokenizationReport, corrupt: TokenizationReport) -> Lis
             "Inspect per-token strings around the diff positions; often a punctuation or whitespace token is also changing."
         )
 
-    # Space-specific hint
     suggestions.append(
         "Remember GPT-2 BPE: tokens in the middle often include a leading space. "
-        "If you care about the token 'Jones', the actual token is usually ' Jones'."
+        "If you care about the token 'wizard', the actual token is usually ' wizard'."
     )
 
     return suggestions

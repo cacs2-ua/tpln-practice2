@@ -31,12 +31,11 @@ def main() -> None:
     device = get_device()
     print("Device:", device)
 
-    CLEAN_TEXT = "Michelle Jones was a top-notch student. Michelle"
-    CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
+    CLEAN_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"
+    CORRUPT_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"
 
-    # IMPORTANT: GPT-2 BPE typically needs leading spaces for mid-sequence words
-    TOKEN_A = " Jones"  # clean-consistent
-    TOKEN_B = " Smith"  # corrupt-consistent
+    TOKEN_A = " wizard"  # clean-consistent
+    TOKEN_B = " algorithm"  # corrupt-consistent
 
     # Load model + tokenizer
     model = GPT.from_pretrained("gpt2").to(device).eval()
@@ -53,7 +52,7 @@ def main() -> None:
     print(tp.describe_pair(comp))
     print("Changed token position:", comp.diff_positions[0])
 
-    # Build the sweep matrix (Section 9)
+    # Build the sweep matrix
     res = build_patching_sweep(
         model,
         bpe,
@@ -125,7 +124,7 @@ def main() -> None:
         formats=("png", "pdf"),
         dpi=300,
     )
-    print("Saved Section 10 heatmap to:", out_dir.resolve())
+    print("Saved heatmap to:", out_dir.resolve())
 
 
 if __name__ == "__main__":
