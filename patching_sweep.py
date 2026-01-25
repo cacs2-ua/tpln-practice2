@@ -81,6 +81,7 @@ def sweep_from_ids(
     layers: Optional[Sequence[int]] = None,
     positions: Optional[Sequence[int]] = None,
     progress: bool = False,
+    patch_location: Optional[str] = None,
 ) -> torch.Tensor:
     """
     Compute the full patching matrix given:
@@ -119,7 +120,12 @@ def sweep_from_ids(
     pos_index = {P: j for j, P in enumerate(positions)}
 
     for L, P in it:
-        _logits, _loss = model(idx_corrupt, layer_to_patch=int(L), position_to_patch=int(P))
+        _logits, _loss = model(
+            idx_corrupt,
+            layer_to_patch=int(L),
+            position_to_patch=int(P),
+            patch_location=patch_location,
+        )
         if model.last_logits is None:
             raise RuntimeError("model.last_logits was not set. Ensure forward() stores last_logits.")
         last = model.last_logits[0].detach()  # (vocab,)
@@ -139,6 +145,7 @@ def build_patching_sweep(
     token_b_str: str,
     overwrite_cache: bool = True,
     progress: bool = True,
+    patch_location: Optional[str] = None,
 ) -> SweepResult:
     """
     Full pipeline:
@@ -192,6 +199,7 @@ def build_patching_sweep(
         layers=list(range(n_layers)),
         positions=list(range(T)),
         progress=progress,
+        patch_location=patch_location
     )
 
     return SweepResult(
