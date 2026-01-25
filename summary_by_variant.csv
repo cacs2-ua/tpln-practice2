@@ -1,0 +1,2 @@
+variant_id,token_len,diff_pos,clean_token->corrupt_token,score_clean,score_corrupt,delta (corrupt-clean),max_restoration_raw,restoration_frac,hot1_L,hot1_P,hot1_R,hot2_L,hot2_P,hot2_R,hot3_L,hot3_P,hot3_R,spread(>0.5*max_rest),spread(>0.2*|delta|),hotspot_dist_to_diffpos
+v01,11,1,' Jones' -> ' Smith',-4.124076843261719,5.656242370605469,9.780319213867188,9.780319213867188,1.0,11,10,1.0,0,1,0.9943803548812866,1,1,0.9941907525062561,12,15,9
