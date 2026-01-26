@@ -17,8 +17,6 @@ from torch.nn import functional as F
 
 from mingpt.utils import CfgNode as CN
 
-# -----------------------------------------------------------------------------
-
 class NewGELU(nn.Module):
     """
     Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
@@ -161,7 +159,6 @@ class GPT(nn.Module):
         n_params = sum(p.numel() for p in self.transformer.parameters())
         print("number of parameters: %.2fM" % (n_params/1e6,))
 
-        # --- Mechanistic interpretability instrumentation (Section 5) ---
         # clean cache: list[layer][position] -> Tensor(d_model) for batch element 0
         self.clean_activations: Optional[List[List[torch.Tensor]]] = None
         self.clean_activation_meta: Optional[Dict[str, int]] = None
@@ -297,11 +294,9 @@ class GPT(nn.Module):
         overwrite_cache: bool = False,
         layer_to_patch: Optional[int] = None,
         position_to_patch: Optional[int] = None,
-        # NEW (EXTRA 1): wrong-source patch controls
         source_layer: Optional[int] = None,
         source_position: Optional[int] = None,
         patch_alpha: Optional[float] = None,
-        # NEW (EXTRA 3): intra-block patch location
         patch_location: Optional[str] = None,  # 'post_attn' | 'post_mlp' (default)
     ):
         """
@@ -340,7 +335,6 @@ class GPT(nn.Module):
         if loc not in {"post_attn", "post_mlp"}:
             raise ValueError(f"patch_location must be 'post_attn' or 'post_mlp', got {patch_location!r}")
 
-        # --- Patch argument validation (isolation + safety) ---
         patch_requested = (layer_to_patch is not None) or (position_to_patch is not None)
         source_requested = (source_layer is not None) or (source_position is not None)
 
@@ -483,8 +477,6 @@ class GPT(nn.Module):
 
         patch_applied = False
 
-               # --- Transformer block stack (EXTRA 3: split inside each block) ---
-        # --- Transformer block stack (EXTRA 3: split inside each block) ---
         for layer_idx, block in enumerate(self.transformer.h):
 
             # 1) Attention sublayer OUTPUT (delta), BEFORE residual add
@@ -528,11 +520,9 @@ class GPT(nn.Module):
         if patch_requested and (not patch_applied):
             raise RuntimeError("Patch was requested but not applied (internal logic error).")
 
-        # --- Final norm + LM head ---
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
 
-        # --- store last-position logits (next-token distribution after the prompt) ---
         self.last_logits = logits[:, -1, :].detach().clone()
 
         # loss (optional)
@@ -570,9 +560,6 @@ class GPT(nn.Module):
             }
 
         return logits, loss
-
-
-
 
 
     @torch.no_grad()
