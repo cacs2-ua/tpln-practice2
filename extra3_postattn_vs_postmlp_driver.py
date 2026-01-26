@@ -17,10 +17,10 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Device:", device)
 
-    CLEAN_TEXT   = "Michelle Jones was a top-notch student. Michelle"
-    CORRUPT_TEXT = "Michelle Smith was a top-notch student. Michelle"
-    TOKEN_A = " Jones"
-    TOKEN_B = " Smith"
+    CLEAN_TEXT   = "Juan Antonio watched my neural network learn to juggle bananas; he called it wizard science and demanded espresso"
+    CORRUPT_TEXT = "Juan Antonio watched my neural network learn to juggle bananas; he called it algorithm science and demanded espresso"
+    TOKEN_A = " wizard"
+    TOKEN_B = " algorithm"
 
     bpe = BPETokenizer()
     _ = tp.validate_pair(bpe=bpe, clean_text=CLEAN_TEXT, corrupt_text=CORRUPT_TEXT,
