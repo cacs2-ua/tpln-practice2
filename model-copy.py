@@ -17,8 +17,6 @@ from torch.nn import functional as F
 
 from mingpt.utils import CfgNode as CN
 
-# -----------------------------------------------------------------------------
-
 class NewGELU(nn.Module):
     """
     Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
@@ -522,7 +520,6 @@ class GPT(nn.Module):
         if patch_requested and (not patch_applied):
             raise RuntimeError("Patch was requested but not applied (internal logic error).")
 
-        # --- Final norm + LM head ---
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
 
@@ -549,6 +546,7 @@ class GPT(nn.Module):
                     "to replace it for a new clean prompt."
                 )
 
+            # EXTRA 3 caches
             self.clean_post_attn_activations = acts_post_attn
             self.clean_post_mlp_activations = acts_post_mlp
 
@@ -562,9 +560,6 @@ class GPT(nn.Module):
             }
 
         return logits, loss
-
-
-
 
 
     @torch.no_grad()
