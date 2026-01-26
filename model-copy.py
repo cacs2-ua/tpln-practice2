@@ -161,7 +161,6 @@ class GPT(nn.Module):
         n_params = sum(p.numel() for p in self.transformer.parameters())
         print("number of parameters: %.2fM" % (n_params/1e6,))
 
-        # --- Mechanistic interpretability instrumentation (Section 5) ---
         # clean cache: list[layer][position] -> Tensor(d_model) for batch element 0
         self.clean_activations: Optional[List[List[torch.Tensor]]] = None
         self.clean_activation_meta: Optional[Dict[str, int]] = None
@@ -172,6 +171,17 @@ class GPT(nn.Module):
         # last-token logits (Section 6): logits at final prompt position (next-token distribution)
         self.last_logits: Optional[torch.Tensor] = None
         self.last_patch: Optional[Tuple[int, int]] = None
+        self.last_patch_source: Optional[Tuple[int, int]] = None   # (source_layer, source_pos)
+        self.last_patch_alpha: Optional[float] = None
+        self.last_patch_location: Optional[str] = None  # 'post_attn' | 'post_mlp'
+
+        # clean caches for intra-block states
+        self.clean_post_attn_activations: Optional[List[List[torch.Tensor]]] = None
+        self.clean_post_mlp_activations: Optional[List[List[torch.Tensor]]] = None
+
+        # last recorded intra-block activations (debug/inspection)
+        self.last_post_attn_activations: Optional[List[List[torch.Tensor]]] = None
+        self.last_post_mlp_activations: Optional[List[List[torch.Tensor]]] = None
     def _init_weights(self, module):
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -274,6 +284,8 @@ class GPT(nn.Module):
         """Clear the stored clean activation cache (Section 5)."""
         self.clean_activations = None
         self.clean_activation_meta = None
+        self.clean_post_attn_activations = None
+        self.clean_post_mlp_activations = None
     def forward(
         self,
         idx,
@@ -284,6 +296,10 @@ class GPT(nn.Module):
         overwrite_cache: bool = False,
         layer_to_patch: Optional[int] = None,
         position_to_patch: Optional[int] = None,
+        source_layer: Optional[int] = None,
+        source_position: Optional[int] = None,
+        patch_alpha: Optional[float] = None,
+        patch_location: Optional[str] = None,  # 'post_attn' | 'post_mlp' (default)
     ):
         """
         Forward pass with:
@@ -291,35 +307,52 @@ class GPT(nn.Module):
         - optional clean activation caching (Section 5)
         - last-position logits extraction (Section 6)
         - activation patching (Section 7)
+        - WRONG-SOURCE patching control (EXTRA 1)
+        - INTRA-BLOCK patching location (EXTRA 3): post-attention vs post-MLP
 
-        Activation definition:
-        - residual stream output AFTER each transformer block
-        - recorded for each token position
-        - stored for batch element 0 only
-        - deep-copied via detach().clone()
+        Activation definition (standardized intra-block states):
+        - post_attn: attention sublayer OUTPUT (delta) BEFORE adding the residual
+        - post_mlp: residual stream AFTER MLP residual add (block output)
 
-        Patching semantics (Section 7):
-        - if (layer_to_patch, position_to_patch) provided,
-            after block `layer_to_patch` produces x, replace ONLY:
-                x[0, position_to_patch, :] <- clean_activations[layer_to_patch][position_to_patch]
-            then continue forward normally.
-        - exactly ONE (layer, position) patch per run.
-        - patched/corrupted runs MUST NOT overwrite clean cache.
+        Patching semantics:
+        - We patch exactly ONE coordinate (layer_to_patch, position_to_patch) at a chosen location.
+        - Source comes from the CLEAN cache at (source_layer, source_position) at the SAME location.
         """
         # If we're caching, we must record
         record_activations = bool(record_activations or cache_activations)
 
         # Reset per-run outputs (safe defaults)
         self.last_activations = None
+        self.last_post_attn_activations = None
+        self.last_post_mlp_activations = None
+
         self.last_logits = None
         self.last_patch = None
+        self.last_patch_source = None
+        self.last_patch_alpha = None
+        self.last_patch_location = None
 
-        # --- Patch argument validation (isolation + safety) ---
+        # Patch location normalization
+        loc = (patch_location or "post_mlp").strip()
+        if loc not in {"post_attn", "post_mlp"}:
+            raise ValueError(f"patch_location must be 'post_attn' or 'post_mlp', got {patch_location!r}")
+
         patch_requested = (layer_to_patch is not None) or (position_to_patch is not None)
+        source_requested = (source_layer is not None) or (source_position is not None)
+
         if patch_requested:
-            # must provide BOTH
+            # must provide BOTH target coords
             if (layer_to_patch is None) or (position_to_patch is None):
                 raise ValueError("Patching requires BOTH layer_to_patch and position_to_patch (or neither).")
+
+            # if user provides any source coord, must provide BOTH
+            if source_requested and ((source_layer is None) or (source_position is None)):
+                raise ValueError("Wrong-source patching requires BOTH source_layer and source_position (or neither).")
+
+            # default: standard matching patch if source not provided
+            if not source_requested:
+                source_layer = layer_to_patch
+                source_position = position_to_patch
 
             # do not allow writing the clean cache during patched runs (clean-cache safety)
             if cache_activations:
@@ -333,12 +366,25 @@ class GPT(nn.Module):
                     "Clean cache must remain immutable during corrupted/patched runs."
                 )
 
-            # must already have a clean cache
-            if self.clean_activations is None:
-                raise RuntimeError(
-                    "No clean activation cache found (self.clean_activations is None). "
-                    "Run a CLEAN pass first with cache_activations=True."
-                )
+            # must already have a clean cache (post_mlp fallback to legacy clean_activations)
+            if loc == "post_attn":
+                if self.clean_post_attn_activations is None:
+                    raise RuntimeError(
+                        "No clean post-attn cache found. "
+                        "Run a CLEAN pass first with cache_activations=True after applying EXTRA 3."
+                    )
+            else:
+                if (self.clean_post_mlp_activations is None) and (self.clean_activations is None):
+                    raise RuntimeError(
+                        "No clean post-MLP cache found. "
+                        "Run a CLEAN pass first with cache_activations=True."
+                    )
+
+        patch_alpha_f: float = 1.0
+        if patch_requested:
+            patch_alpha_f = 1.0 if patch_alpha is None else float(patch_alpha)
+            if not (0.0 <= patch_alpha_f <= 1.0):
+                raise ValueError(f"patch_alpha must be in [0,1], got {patch_alpha_f}")
 
         device = idx.device
         b, t = idx.size()
@@ -350,27 +396,44 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos)  # (1, t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
 
-        # Prepare activation container (optional)
-        acts = None
+        # Prepare activation containers (optional)
+        acts_post_attn = None
+        acts_post_mlp = None
         if record_activations:
-            acts = []  # list[layer][pos] -> Tensor(d_model)
+            acts_post_attn = []  # list[layer][pos] -> Tensor(d_model)
+            acts_post_mlp = []   # list[layer][pos] -> Tensor(d_model)
 
         # Extra patch compatibility checks once seq_len is known
         if patch_requested:
             n_layer = len(self.transformer.h)
 
+            # target checks
             if not (0 <= int(layer_to_patch) < n_layer):
                 raise IndexError(f"layer_to_patch out of range: {layer_to_patch} (valid: 0..{n_layer-1})")
             if not (0 <= int(position_to_patch) < t):
                 raise IndexError(f"position_to_patch out of range: {position_to_patch} (valid: 0..{t-1})")
 
+            # source checks
+            if not (0 <= int(source_layer) < n_layer):
+                raise IndexError(f"source_layer out of range: {source_layer} (valid: 0..{n_layer-1})")
+            if not (0 <= int(source_position) < t):
+                raise IndexError(f"source_position out of range: {source_position} (valid: 0..{t-1})")
+
+            # choose correct clean bank by location (post_mlp falls back to legacy clean_activations)
+            if loc == "post_attn":
+                bank = self.clean_post_attn_activations
+            else:
+                bank = self.clean_post_mlp_activations if self.clean_post_mlp_activations is not None else self.clean_activations
+
+            if bank is None:
+                raise RuntimeError("Internal: selected clean bank is None.")
+
             # Check cache dimensions match current run
-            if len(self.clean_activations) != n_layer:
+            if len(bank) != n_layer:
                 raise RuntimeError(
-                    f"Clean cache layer count mismatch: cache has {len(self.clean_activations)} "
-                    f"but model has {n_layer} layers."
+                    f"Clean cache layer count mismatch: cache has {len(bank)} but model has {n_layer} layers."
                 )
-            cached_t = len(self.clean_activations[0]) if n_layer > 0 else 0
+            cached_t = len(bank[0]) if n_layer > 0 else 0
             if cached_t != t:
                 raise RuntimeError(
                     f"Sequence length mismatch vs clean cache: clean cache T={cached_t}, current T={t}. "
@@ -378,39 +441,91 @@ class GPT(nn.Module):
                     "and you must re-cache clean activations if the prompt length changes."
                 )
 
+        def _apply_patch(x_state: torch.Tensor, *, layer_idx: int) -> bool:
+            """
+            Patch x_state at [0, position_to_patch, :] using clean cache at (source_layer, source_position)
+            for the chosen location 'loc'. Returns True if patch applied at this layer, else False.
+            """
+            if not patch_requested:
+                return False
+            if layer_idx != int(layer_to_patch):
+                return False
+
+            # select bank
+            if loc == "post_attn":
+                bank = self.clean_post_attn_activations
+            else:
+                bank = self.clean_post_mlp_activations if self.clean_post_mlp_activations is not None else self.clean_activations
+            assert bank is not None
+
+            clean_vec = bank[int(source_layer)][int(source_position)]
+            clean_vec = clean_vec.to(device=x_state.device, dtype=x_state.dtype)
+
+            if patch_alpha_f <= 0.0:
+                # alpha=0 => no-op (keep corrupted)
+                pass
+            elif patch_alpha_f >= 1.0:
+                x_state[0, int(position_to_patch), :].copy_(clean_vec)
+            else:
+                corr_vec = x_state[0, int(position_to_patch), :].detach().clone()
+                mixed_vec = (patch_alpha_f * clean_vec) + ((1.0 - patch_alpha_f) * corr_vec)
+                x_state[0, int(position_to_patch), :].copy_(mixed_vec)
+
+            self.last_patch = (int(layer_to_patch), int(position_to_patch))
+            self.last_patch_source = (int(source_layer), int(source_position))
+            self.last_patch_alpha = patch_alpha_f
+            self.last_patch_location = loc
+            return True
+
         patch_applied = False
 
-        # --- Transformer block stack ---
         for layer_idx, block in enumerate(self.transformer.h):
-            x = block(x)
 
-            # --- Section 7: apply patch exactly after the chosen layer output ---
-            if patch_requested and (layer_idx == int(layer_to_patch)):
-                clean_vec = self.clean_activations[layer_idx][int(position_to_patch)]
-                # Ensure device/dtype compatibility
-                clean_vec = clean_vec.to(device=x.device, dtype=x.dtype)
-                # Copy values into the residual stream at exactly one token position
-                x[0, int(position_to_patch), :].copy_(clean_vec)
+            # 1) Attention sublayer OUTPUT (delta), BEFORE residual add
+            attn_delta = block.attn(block.ln_1(x))  # (B, T, C)
 
-                patch_applied = True
-                self.last_patch = (int(layer_to_patch), int(position_to_patch))
+            # post-attn patch: patch the ATTENTION DELTA (not the residual stream)
+            if loc == "post_attn" and patch_requested and (layer_idx == int(layer_to_patch)):
+                attn_delta = attn_delta.clone()
+                if _apply_patch(attn_delta, layer_idx=layer_idx):
+                    patch_applied = True
 
-            # --- Section 5: record activations AFTER patching (so next layer consumes the patched value) ---
+            # record post-attn activations (store attn_delta)
             if record_activations:
-                layer_acts = []
+                layer_acts_attn = []
                 for p in range(t):
-                    layer_acts.append(x[0, p, :].detach().clone())
-                acts.append(layer_acts)
+                    layer_acts_attn.append(attn_delta[0, p, :].detach().clone())
+                acts_post_attn.append(layer_acts_attn)
+
+            # 2) Residual add after attention
+            x_attn = x + attn_delta
+
+            # 3) MLP sublayer (delta) + residual add
+            mlp_delta = block.mlpf(block.ln_2(x_attn))
+            x_out = x_attn + mlp_delta  # block output (post-MLP)
+
+            # post-MLP patch: patch block output
+            if loc == "post_mlp" and patch_requested and (layer_idx == int(layer_to_patch)):
+                x_out = x_out.clone()
+                if _apply_patch(x_out, layer_idx=layer_idx):
+                    patch_applied = True
+
+            # record post-MLP activations (store x_out)
+            if record_activations:
+                layer_acts_mlp = []
+                for p in range(t):
+                    layer_acts_mlp.append(x_out[0, p, :].detach().clone())
+                acts_post_mlp.append(layer_acts_mlp)
+
+            x = x_out
 
         if patch_requested and (not patch_applied):
-            # With correct indices this should never happen, but it guards refactors.
             raise RuntimeError("Patch was requested but not applied (internal logic error).")
 
         # --- Final norm + LM head ---
         x = self.transformer.ln_f(x)
         logits = self.lm_head(x)
 
-        # --- Section 6: store last-position logits (next-token distribution after the prompt) ---
         self.last_logits = logits[:, -1, :].detach().clone()
 
         # loss (optional)
@@ -420,7 +535,10 @@ class GPT(nn.Module):
 
         # finalize activation storage
         if record_activations:
-            self.last_activations = acts
+            # backward-compatible "last_activations" = post-MLP
+            self.last_activations = acts_post_mlp
+            self.last_post_attn_activations = acts_post_attn
+            self.last_post_mlp_activations = acts_post_mlp
 
         # write clean cache ONLY when explicitly requested
         if cache_activations:
@@ -431,7 +549,12 @@ class GPT(nn.Module):
                     "to replace it for a new clean prompt."
                 )
 
-            self.clean_activations = acts
+            self.clean_post_attn_activations = acts_post_attn
+            self.clean_post_mlp_activations = acts_post_mlp
+
+            # backward compatibility: original cache is post-MLP
+            self.clean_activations = acts_post_mlp
+
             self.clean_activation_meta = {
                 "seq_len": int(t),
                 "n_layer": int(len(self.transformer.h)),
@@ -439,6 +562,8 @@ class GPT(nn.Module):
             }
 
         return logits, loss
+
+
 
 
 
